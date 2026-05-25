@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Personal Preference Manifesto</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <main class="page">
+      <header class="masthead">
+        <p class="section-mark">§1</p>
+        <h1>Personal Preference Manifesto</h1>
+        <div class="toolbar">
+          <button data-tab="all" class="tab active">All</button>
+          <button data-tab="pending" class="tab">Pending</button>
+          <button data-tab="conflicts" class="tab">Conflicts</button>
+          <button data-tab="evolution" class="tab">Evolution</button>
+          <button data-tab="settings" class="tab">Settings</button>
+        </div>
+      </header>
+
+      <section class="summary" aria-label="Executive Summary">
+        <h2>1.1 Executive Summary</h2>
+        <dl>
+          <div><dt>Active preferences</dt><dd id="active-count">0</dd></div>
+          <div><dt>Pending confirmation</dt><dd id="pending-count">0</dd></div>
+          <div><dt>Conflicts awaiting resolution</dt><dd id="conflict-count">0</dd></div>
+          <div><dt>Effective mode</dt><dd id="mode-label">auto</dd></div>
+        </dl>
+        <p class="remark" id="store-path"></p>
+      </section>
+
+      <section id="main-section">
+        <div class="section-heading">
+          <h2 id="section-title">1.2 High-Frequency Preferences</h2>
+          <label>
+            <span>Search</span>
+            <input id="search" type="search" autocomplete="off">
+          </label>
+        </div>
+        <div id="content"></div>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
