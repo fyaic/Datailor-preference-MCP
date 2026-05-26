@@ -18,5 +18,7 @@ venv/
 
 data/*
 !data/.gitkeep
+.snapshots/
+.summary/
 
 *.log

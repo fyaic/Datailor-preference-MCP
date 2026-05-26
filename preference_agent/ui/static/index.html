@@ -10,23 +10,31 @@
     <main class="page">
       <header class="masthead">
         <p class="section-mark">§1</p>
-        <h1>Personal Preference Manifesto</h1>
-        <div class="toolbar">
-          <button data-tab="all" class="tab active">All</button>
-          <button data-tab="pending" class="tab">Pending</button>
-          <button data-tab="conflicts" class="tab">Conflicts</button>
-          <button data-tab="evolution" class="tab">Evolution</button>
-          <button data-tab="settings" class="tab">Settings</button>
+        <div class="masthead-row">
+          <h1 data-i18n="appTitle">Personal Preference Manifesto</h1>
+          <div class="language-switcher" aria-label="Language">
+            <button data-language="en" class="language-button active">EN</button>
+            <button data-language="zh" class="language-button">中</button>
+          </div>
+        </div>
+        <div class="toolbar" aria-label="Sections">
+          <button data-tab="all" data-i18n="tabs.all" class="tab active">All</button>
+          <button data-tab="pending" data-i18n="tabs.pending" class="tab">Pending</button>
+          <button data-tab="conflicts" data-i18n="tabs.conflicts" class="tab">Conflicts</button>
+          <button data-tab="evolution" data-i18n="tabs.evolution" class="tab">Evolution</button>
+          <button data-tab="injection" data-i18n="tabs.injection" class="tab">Injection</button>
+          <button data-tab="settings" data-i18n="tabs.settings" class="tab">Settings</button>
         </div>
       </header>
 
       <section class="summary" aria-label="Executive Summary">
-        <h2>1.1 Executive Summary</h2>
+        <h2 data-i18n="summaryTitle">1.1 Executive Summary</h2>
+        <div id="executive-text" class="executive-copy"></div>
         <dl>
-          <div><dt>Active preferences</dt><dd id="active-count">0</dd></div>
-          <div><dt>Pending confirmation</dt><dd id="pending-count">0</dd></div>
-          <div><dt>Conflicts awaiting resolution</dt><dd id="conflict-count">0</dd></div>
-          <div><dt>Effective mode</dt><dd id="mode-label">auto</dd></div>
+          <div><dt data-i18n="summary.active">Active preferences</dt><dd id="active-count">0</dd></div>
+          <div><dt data-i18n="summary.pending">Pending confirmation</dt><dd id="pending-count">0</dd></div>
+          <div><dt data-i18n="summary.conflicts">Conflicts awaiting resolution</dt><dd id="conflict-count">0</dd></div>
+          <div><dt data-i18n="summary.mode">Effective mode</dt><dd id="mode-label">auto</dd></div>
         </dl>
         <p class="remark" id="store-path"></p>
       </section>
@@ -35,7 +43,7 @@
         <div class="section-heading">
           <h2 id="section-title">1.2 High-Frequency Preferences</h2>
           <label>
-            <span>Search</span>
+            <span data-i18n="search">Search</span>
             <input id="search" type="search" autocomplete="off">
           </label>
         </div>

@@ -9,8 +9,9 @@ from abc import ABC, abstractmethod
 from difflib import SequenceMatcher
 from typing import Any
 
+from .live_confidence import LiveConfidence, live_confidence, should_inject_live_confidence
 from .models import Evidence, PreferenceRecord, Session, unique_strings
-from .quality import looks_like_one_off_task, should_recall_user_text
+from .quality import looks_like_one_off_task, looks_like_raw_user_fragment, should_recall_user_text
 
 
 class PreferenceModelBackend(ABC):
@@ -170,30 +171,33 @@ class HeuristicBackend(PreferenceModelBackend):
     ) -> dict[str, Any]:
         if not records:
             return _no_preference(task)
-        query = " ".join([task, json.dumps(context, ensure_ascii=False)])
-        scored: list[tuple[float, PreferenceRecord]] = []
-        for record in records:
-            if record.status != "active":
-                continue
-            score = semantic_similarity(query, _scope_text(record))
-            if _category(query) and _category(_scope_text(record)) == _category(query):
-                score = max(score, 0.26)
-            if score >= 0.16:
-                scored.append((score, record))
-        scored.sort(key=lambda item: item[0], reverse=True)
+        scored = _live_scored_records(task=task, context=context, records=records)
         matches = [
             {
                 "id": record.id,
                 "title": record.title,
-                "confidence": _confidence_from_score(score, record.confidence),
-                "score": round(score, 3),
+                "confidence": live.label,
+                "stored_confidence": record.confidence,
+                "live_confidence": live.score,
+                "confidence_factors": {
+                    "base": live.base,
+                    "evidence_boost": live.evidence_boost,
+                    "recency_decay": live.recency_decay,
+                    "consistency_penalty": live.consistency_penalty,
+                    "relevance_bonus": live.relevance_bonus,
+                },
+                "confidence_reasons": live.reasons,
+                "score": round(relevance, 3),
                 "instruction": record.preference,
                 "applies_to": record.applies_to,
             }
-            for score, record in scored[:5]
+            for _live_score, relevance, live, record in scored[:5]
         ]
         if not matches:
             return _no_preference(task)
+        conflict_group = _find_conflicts_among([record for _score, _relevance, _live, record in scored[:3]])
+        if conflict_group:
+            return _backend_conflict_response(agent=agent, matches=matches, conflicts=conflict_group)
         combined = "；".join(match["instruction"] for match in matches[:3])
         return {
             "decision": "apply",
@@ -238,6 +242,7 @@ class OpenAICompatibleBackend(PreferenceModelBackend):
                         "source": session.source,
                         "quote": item.get("evidence_quote") or item.get("preference") or "",
                         "role": "user",
+                        "source_type": "user_explicit",
                     }
                 ]
             records.append(PreferenceRecord.from_dict(item))
@@ -267,6 +272,14 @@ class OpenAICompatibleBackend(PreferenceModelBackend):
     ) -> dict[str, Any]:
         if not records:
             return _no_preference(task)
+        candidates = _live_scored_preference_payloads(
+            task=task,
+            context=context,
+            records=records,
+            require_injection_threshold=False,
+        )
+        if not candidates:
+            return _no_preference(task)
         result = self._chat_json(
             system=DECIDE_SYSTEM_PROMPT,
             user=json.dumps(
@@ -274,7 +287,7 @@ class OpenAICompatibleBackend(PreferenceModelBackend):
                     "agent": agent,
                     "task": task,
                     "context": context,
-                    "preferences": [record.to_dict() for record in records if record.status == "active"],
+                    "preferences": candidates,
                 },
                 ensure_ascii=False,
             ),
@@ -349,6 +362,9 @@ MERGE_SYSTEM_PROMPT = """你是偏好库合并器。判断 candidate 与 existin
 
 DECIDE_SYSTEM_PROMPT = """你是偏好代言决策器。给定 agent 当前任务和偏好库，判断回复或做事前应应用哪些偏好。
 语义和意图优先，不要求字面一致。
+输入偏好已包含 live_confidence：这是当前任务下由基础置信度、证据、时间、一致性和场景相关性计算出的动态置信度。
+优先使用 live_confidence.score 高、且确实适合当前任务的偏好；不要因为 stored confidence 高就强行应用低相关偏好。
+status 不是 active 的偏好不能直接注入；如果它与当前任务强相关，只能用于解释不确定性或触发澄清。
 输出 JSON：
 {
   "decision": "apply|no_preference|escalate",
@@ -379,7 +395,7 @@ def _record(
         triggers=unique_strings(triggers, limit=8),
         exceptions=unique_strings(exceptions, limit=8),
         confidence=confidence,
-        evidence=[Evidence(source=source, quote=quote, role="user")],
+        evidence=[Evidence(source=source, quote=quote, role="user", source_type="user_explicit")],
     )
 
 
@@ -435,6 +451,11 @@ def _keyword_overlap(left: str, right: str) -> float:
         "边界",
         "安全",
         "中文",
+        "回复",
+        "回答",
+        "用户问题",
+        "简洁",
+        "详细",
         "回读",
         "linear",
         "沉淀",
@@ -506,6 +527,14 @@ def _generalize_preference(sentence: str, context: str = "") -> str:
         word in joined for word in ("不要", "别", "先不要", "本地", "留在本地")
     ):
         return "代码修改默认先保留在本地，不主动 commit 或 push，除非用户明确要求。"
+    if any(word in lowered for word in ("edit", "编辑")) and any(word in joined for word in ("不要覆盖", "别覆盖", "覆盖")):
+        return "修改已有文件时优先使用增量编辑，避免覆盖用户本地未同步修改。"
+    if any(word in joined for word in ("结论句", "问句")) and any(word in joined for word in ("标题", "title")):
+        return "撰写标题时使用结论句，避免使用问句形式。"
+    if "中文" in joined and any(word in joined for word in ("回复", "回答", "输出")):
+        return "默认使用中文回复用户。"
+    if "动画" in joined and any(word in joined for word in ("慢", "较慢", "过快", "速度")):
+        return "设计交互动画或过渡效果时，使用较慢的动画速度，避免过快的跳跃或涟漪效果。"
     if any(word in joined for word in ("反问", "不用问", "不要问", "别问", "说了做其实没做", "说了做")):
         return "用户已经明确要求执行时，避免反复确认；在风险可控时直接推进并汇报结果。"
     if any(word in joined for word in ("简洁", "短一点", "两句话", "少废话", "不要长文", "眼花", "子弹点", "分点", "不要全部平铺")):
@@ -514,9 +543,11 @@ def _generalize_preference(sentence: str, context: str = "") -> str:
         return "回复复杂问题时先给结论或大纲，再展开必要细节。"
     if looks_like_one_off_task(text) and not should_recall_user_text(text):
         return ""
+    if looks_like_raw_user_fragment(text):
+        return ""
     if not should_recall_user_text(text):
         return ""
-    return text
+    return ""
 
 
 def _category(text: str) -> str:
@@ -527,6 +558,8 @@ def _category(text: str) -> str:
         return "test"
     if any(word in lowered for word in ("文档", "沉淀", "方案设计", "复盘", "markdown")):
         return "docs"
+    if any(word in lowered for word in ("回复", "回答", "用户问题", "简洁", "详细", "长文", "展开", "concise", "brief", "detailed")):
+        return "reply"
     if any(word in lowered for word in ("linear", "issue")):
         return "linear"
     if any(word in lowered for word in ("中文", "回读", "乱码")):
@@ -547,6 +580,8 @@ def _infer_applies_to(sentence: str) -> str:
         return "当 agent 修改代码、完成实现、询问测试或 review 标准时"
     if "Linear" in sentence or "issue" in sentence.casefold():
         return "当 agent 完成阶段性成果并可能需要更新 Linear issue 时"
+    if "中文" in sentence and any(word in sentence for word in ("回复", "回答", "输出")):
+        return "当 agent 回复用户时"
     if "中文" in sentence or "回读" in sentence:
         return "当 agent 把包含中文的内容写入外部系统后"
     if "文档" in sentence or "沉淀" in sentence:
@@ -590,12 +625,116 @@ def _dedupe_records(records: list[PreferenceRecord]) -> list[PreferenceRecord]:
     return deduped
 
 
-def _confidence_from_score(score: float, stored: str) -> str:
-    if score >= 0.45 or stored == "high":
-        return "high"
-    if score >= 0.26 or stored == "medium":
-        return "medium"
-    return "low"
+def _live_scored_records(
+    task: str,
+    context: dict[str, Any],
+    records: list[PreferenceRecord],
+    require_injection_threshold: bool = True,
+) -> list[tuple[float, float, LiveConfidence, PreferenceRecord]]:
+    query = " ".join([task, json.dumps(context, ensure_ascii=False)])
+    scored: list[tuple[float, float, LiveConfidence, PreferenceRecord]] = []
+    for record in records:
+        if str(record.status or "").casefold() in {"rejected", "archived", "deleted"}:
+            continue
+        if require_injection_threshold and str(record.status or "").casefold() != "active":
+            continue
+        relevance = _relevance_score(query, record)
+        live = live_confidence(record, relevance_score=relevance)
+        if not require_injection_threshold or should_inject_live_confidence(live):
+            scored.append((live.score, relevance, live, record))
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return scored
+
+
+def _live_scored_preference_payloads(
+    task: str,
+    context: dict[str, Any],
+    records: list[PreferenceRecord],
+    require_injection_threshold: bool = True,
+) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for _score, relevance, live, record in _live_scored_records(
+        task=task,
+        context=context,
+        records=records,
+        require_injection_threshold=require_injection_threshold,
+    ):
+        item = record.to_dict()
+        item["relevance_score"] = round(relevance, 4)
+        item["live_confidence"] = live.to_dict()
+        payloads.append(item)
+    return payloads
+
+
+def _relevance_score(query: str, record: PreferenceRecord) -> float:
+    record_scope = _scope_text(record)
+    score = semantic_similarity(query, record_scope)
+    query_category = _category(query)
+    record_category = _category(record_scope)
+    if query_category and record_category == query_category:
+        score = max(score, 0.26)
+    return score
+
+
+DETAIL_CONFLICT_WORDS = ("详细", "展开", "完整", "充分解释", "长文", "exhaustive", "detailed")
+CONCISE_CONFLICT_WORDS = ("简洁", "简短", "短一点", "不要长文", "别啰嗦", "少废话", "concise", "brief", "short")
+TEST_REQUIRED_WORDS = ("测试", "验证", "pytest", "test", "verify", "verification", "回归")
+TEST_SKIP_WORDS = ("不用测试", "不要测试", "跳过测试", "不测", "无需验证", "no test", "skip test", "without verification")
+ASK_WORDS = ("确认", "询问", "反问", "ask", "confirm", "manual")
+NO_ASK_WORDS = ("不用问", "不要问", "无需确认", "直接", "自动", "不反问", "do not ask", "no confirmation")
+
+
+def _find_conflicts_among(records: list[PreferenceRecord]) -> list[PreferenceRecord]:
+    for index, left in enumerate(records):
+        for right in records[index + 1 :]:
+            if _records_conflict_for_injection(left, right):
+                return [left, right]
+    return []
+
+
+def _records_conflict_for_injection(left: PreferenceRecord, right: PreferenceRecord) -> bool:
+    left_text = _scope_text(left)
+    right_text = _scope_text(right)
+    return (
+        _opposes(left_text, right_text, DETAIL_CONFLICT_WORDS, CONCISE_CONFLICT_WORDS)
+        or _opposes(left_text, right_text, TEST_REQUIRED_WORDS, TEST_SKIP_WORDS)
+        or _opposes(left_text, right_text, ASK_WORDS, NO_ASK_WORDS)
+    )
+
+
+def _opposes(left: str, right: str, first: tuple[str, ...], second: tuple[str, ...]) -> bool:
+    return (_has_any(left, first) and _has_any(right, second)) or (_has_any(left, second) and _has_any(right, first))
+
+
+def _backend_conflict_response(
+    agent: str,
+    matches: list[dict[str, Any]],
+    conflicts: list[PreferenceRecord],
+) -> dict[str, Any]:
+    options = "；".join(f"{index + 1}. {record.preference}" for index, record in enumerate(conflicts))
+    conflict_ids = [record.id for record in conflicts]
+    return {
+        "decision": "escalate",
+        "agent": agent,
+        "matched_preferences": matches,
+        "conflict": {
+            "preference_ids": conflict_ids,
+            "options": [
+                {
+                    "id": record.id,
+                    "title": record.title,
+                    "instruction": record.preference,
+                    "applies_to": record.applies_to,
+                }
+                for record in conflicts
+            ],
+        },
+        "conflict_preference_ids": sorted(conflict_ids),
+        "agent_instruction": f"检测到本轮命中的用户偏好互相冲突，不能同时应用。请简短反问用户本次采用哪一种，或是否两个都不适用：{options}。",
+        "escalate": True,
+        "clarification_required": True,
+        "reason": "top-3 命中的偏好之间存在冲突，不能拼接注入。",
+    }
 
 
 def _no_preference(task: str) -> dict[str, Any]:

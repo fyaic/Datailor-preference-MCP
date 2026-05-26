@@ -8,6 +8,7 @@ from pathlib import Path
 from preference_agent.backends import HeuristicBackend
 from preference_agent.engine import PreferenceEngine
 from preference_agent.mcp_server import handle_request
+from preference_agent.models import Session, SessionMessage
 from preference_agent.store import MarkdownPreferenceStore
 
 
@@ -64,6 +65,43 @@ class PreferenceEngineTests(unittest.TestCase):
             self.assertGreaterEqual(len(records), 2)
             self.assertTrue(result.replaced or result.merged or result.added)
             self.assertIn("明确说明", store.read_text(encoding="utf-8"))
+
+    def test_capture_dry_run_filters_raw_one_off_fragments(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = Path(temp) / "prefs.md"
+            engine = self.make_engine(store)
+            session = Session(
+                source="quality-regression",
+                session_id="bad-fragments",
+                messages=[
+                    SessionMessage(role="user", content="B 而且必须无头。"),
+                    SessionMessage(role="user", content="我稍微调整了一下 请保留不要覆盖。"),
+                    SessionMessage(role="user", content="应该就在obsidian本地目录的.plugin 请问能否合成一个文件夹？"),
+                    SessionMessage(role="user", content="我希望在微信ide里面预览但是一直没有加载出来，请检查以下代码。"),
+                ],
+            )
+
+            result = engine.capture_session(session, dry_run=True)
+
+            self.assertEqual(result.added, [])
+            self.assertEqual(result.merged, [])
+            self.assertGreaterEqual(result.filtered_candidates, 0)
+            self.assertEqual(MarkdownPreferenceStore(store).load(), [])
+
+    def test_capture_dry_run_keeps_generalized_preference(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = Path(temp) / "prefs.md"
+            engine = self.make_engine(store)
+            session = Session(
+                source="quality-regression",
+                session_id="good-preference",
+                messages=[SessionMessage(role="user", content="以后默认回复我中文。")],
+            )
+
+            result = engine.capture_session(session, dry_run=True)
+
+            self.assertEqual(len(result.added), 1)
+            self.assertEqual(MarkdownPreferenceStore(store).load(), [])
 
     def test_mcp_tools_call_decide(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from .backends import HeuristicBackend
+from .injection_log import log_injection_event
 from .models import PreferenceRecord, now_iso
+from .paths import default_injection_dir as default_injection_dir_path
 from .store import MarkdownPreferenceStore
 
 
@@ -45,10 +47,7 @@ class PrewarmResult:
 
 
 def default_injection_dir() -> Path:
-    path = os.getenv("PREFERENCE_INJECTION_DIR")
-    if path:
-        return Path(path)
-    return Path(__file__).resolve().parents[1] / "data" / ".injection"
+    return default_injection_dir_path()
 
 
 def sync_injection_artifacts(
@@ -126,6 +125,24 @@ def prewarm_session(
     out_dir.mkdir(parents=True, exist_ok=True)
     sync_result = sync_injection_artifacts(store.path, out_dir)
     decision = HeuristicBackend().decide(task=task, context=context or {}, records=records, agent=agent)
+    from .decision_conflicts import apply_decision_conflict_policy
+
+    decision = apply_decision_conflict_policy(
+        decision,
+        records=records,
+        store_path=store.path,
+        task=task,
+        context=context or {},
+    )
+    log_injection_event(
+        store_path=store.path,
+        hook="prewarm",
+        agent=agent,
+        task=task,
+        context=context or {},
+        decision=decision,
+        source="prewarm_session",
+    )
     fallback_text = Path(sync_result.fallback_md_file).read_text(encoding="utf-8")
     instruction = decision.get("agent_instruction") or ""
     if not instruction:

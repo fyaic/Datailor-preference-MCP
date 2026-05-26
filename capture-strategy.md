@@ -45,8 +45,6 @@ capture runner 启动
 
 ```powershell
 $env:PREFERENCE_PROJECT_ROOT = "."
-$env:PREFERENCE_STORE_PATH = "data\个人偏好.md"
-$env:PREFERENCE_CHECKPOINT_DIR = "data\.capture-state"
 $env:PREFERENCE_CAPTURE_DEBUG = "0"
 $env:PREFERENCE_CAPTURE_MODE = "recall-extract"
 $env:PREFERENCE_CAPTURE_BATCH_SIZE = "24"
@@ -54,6 +52,8 @@ $env:PREFERENCE_CAPTURE_MAX_MINUTES = "0"
 $env:PREFERENCE_MODEL_TIMEOUT = "120"
 $env:PREFERENCE_MODEL_BACKEND = "openai-compatible"
 ```
+
+默认无需设置 `PREFERENCE_STORE_PATH` / `PREFERENCE_CHECKPOINT_DIR`。Datailor 会写入用户级数据目录，例如 Windows `%APPDATA%\Datailor`。只有需要把数据放到自定义位置时，才设置 `DATAILOR_DATA_DIR` 或 `PREFERENCE_STORE_PATH`。
 
 接云模型或本地模型时，只替换模型后端：
 
@@ -263,7 +263,7 @@ API key 只写入 `.env.local`，不要写入文档或日志。
 大规模捕获的默认产品输出只有一份 Markdown：
 
 ```text
-data/
+<user-data>/
   个人偏好.md
   .capture-state/
     kimi-history.checkpoint.json
@@ -295,7 +295,7 @@ metadata、candidate id、source quote、confidence 等信息不进入默认偏�
 - 外层 loop 默认持续到文件遍历完成，不依赖 agent 手动维护。
 - API 失败只影响当前 batch，按 `PREFERENCE_CAPTURE_MAX_RETRIES` 重试；重试后仍失败则记录错误并跳过该 batch。
 - 默认不写 candidate/extracted/summary 多份重复文件。
-- 设置 `PREFERENCE_CAPTURE_DEBUG=1` 时，失败批次才写入 `data\.debug-capture\*-failures.jsonl`，保留错误、候选 ID 和来源，方便复盘真实灾难现场。
+- 设置 `PREFERENCE_CAPTURE_DEBUG=1` 时，失败批次才写入 `<user-data>\.debug-capture\*-failures.jsonl`，保留错误、候选 ID 和来源，方便复盘真实灾难现场。
 - `PREFERENCE_MODEL_TIMEOUT` 控制单次模型请求超时，防止卡死在某个请求上。
 - 显式设置 `PREFERENCE_CAPTURE_MAX_MINUTES` 或传 `--max-minutes` 时，到点写 checkpoint 后正常退出。
 - 下一次启动从 checkpoint 的 `line` 继续。

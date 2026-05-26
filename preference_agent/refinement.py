@@ -79,12 +79,16 @@ def _find_normalization_target(
 ) -> PreferenceRecord | None:
     best_score = 0.0
     best_record: PreferenceRecord | None = None
+    candidate_category = _quality_category(candidate.preference or _record_text(candidate))
     for record in records:
+        record_category = _quality_category(record.preference or _record_text(record))
+        if candidate_category and record_category and candidate_category != record_category:
+            continue
         score = semantic_similarity(_record_text(candidate), _record_text(record))
         if score > best_score:
             best_score = score
             best_record = record
-    return best_record if best_record and best_score >= 0.82 and not conflict_likely(candidate, best_record) else None
+    return best_record if best_record and best_score >= 0.9 and not conflict_likely(candidate, best_record) else None
 
 
 def _has_content(record: PreferenceRecord) -> bool:
@@ -115,6 +119,21 @@ def _has_negation(text: str) -> bool:
 def _has_any(text: str, words: tuple[str, ...]) -> bool:
     lowered = text.casefold()
     return any(word.casefold() in lowered for word in words)
+
+
+def _quality_category(text: str) -> str:
+    lowered = text.casefold()
+    if any(word in lowered for word in ("review", "审查", "边界情况", "异常路径", "回归风险", "bug")):
+        return "review"
+    if any(word in lowered for word in ("测试", "验证", "coverage", "覆盖率", "pytest", "test")):
+        return "test"
+    if any(word in lowered for word in ("文档", "沉淀", "复盘", "markdown")):
+        return "docs"
+    if any(word in lowered for word in ("回复", "回答", "结论", "大纲", "简洁", "长文")):
+        return "reply"
+    if any(word in lowered for word in ("linear", "issue")):
+        return "linear"
+    return ""
 
 
 def _confidence_label(score: float, current: str) -> str:

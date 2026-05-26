@@ -7,6 +7,7 @@ from pathlib import Path
 
 from preference_agent.feedback import feedback_report, record_feedback
 from preference_agent.injection import MANAGED_START, prewarm_session, sync_injection_artifacts
+from preference_agent.models import PreferenceRecord
 from preference_agent.store import MarkdownPreferenceStore
 
 
@@ -59,6 +60,35 @@ class InjectionFeedbackTests(unittest.TestCase):
             self.assertTrue(Path(result.session_cache_file).exists())
             self.assertIn("测试", Path(result.session_cache_file).read_text(encoding="utf-8"))
             self.assertTrue(result.agent_instruction)
+
+    def test_prewarm_session_applies_conflict_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = root / "prefs.md"
+            MarkdownPreferenceStore(store).save(
+                [
+                    PreferenceRecord(
+                        title="详细回复",
+                        applies_to="回复用户问题时",
+                        preference="回复用户问题时，回答要详细展开，充分解释。",
+                        status="active",
+                        confidence="high",
+                    ),
+                    PreferenceRecord(
+                        title="简洁回复",
+                        applies_to="回复用户问题时",
+                        preference="回复用户问题时，回答要简洁短一点，不要长文。",
+                        status="active",
+                        confidence="high",
+                    ),
+                ]
+            )
+
+            result = prewarm_session(store, "请回复用户问题。", agent="codex", output_dir=root / "inject")
+
+            self.assertEqual(result.decision, "escalate")
+            self.assertIn("resolve_preference_conflict", result.agent_instruction)
+            self.assertTrue((root / ".asked_conflicts.jsonl").exists())
 
     def test_feedback_log_and_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

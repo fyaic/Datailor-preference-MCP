@@ -7,6 +7,7 @@ from uuid import uuid5, NAMESPACE_URL
 
 from .models import PreferenceRecord
 from .privacy import redact_sensitive
+from .snapshots import create_store_snapshot
 
 
 PREF_START = "<!-- preference-agent:records-start -->"
@@ -58,6 +59,7 @@ class MarkdownPreferenceStore:
 
     def save(self, records: list[PreferenceRecord]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        create_store_snapshot(self.path, reason="pre-save")
         text = self._render(records)
         self.path.write_text(text, encoding="utf-8")
 

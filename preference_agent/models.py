@@ -24,14 +24,18 @@ class Evidence:
     source: str
     quote: str
     role: str = "user"
+    source_type: str = "user_explicit"
     observed_at: str = field(default_factory=now_iso)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Evidence":
+        role = str(data.get("role", "user"))
+        source = str(data.get("source", ""))
         return cls(
-            source=str(data.get("source", "")),
+            source=source,
             quote=str(data.get("quote", "")),
-            role=str(data.get("role", "user")),
+            role=role,
+            source_type=str(data.get("source_type") or infer_evidence_source_type(source, role)),
             observed_at=str(data.get("observed_at") or now_iso()),
         )
 
@@ -135,3 +139,17 @@ def unique_strings(items: list[str], limit: int | None = None) -> list[str]:
                 break
     return result
 
+
+def infer_evidence_source_type(source: str, role: str) -> str:
+    lowered = f"{source} {role}".casefold()
+    if any(marker in lowered for marker in ("confirm", "confirmation", "ui_feedback")):
+        return "user_confirm"
+    if any(marker in lowered for marker in ("behavior", "action", "hook")) or role == "system":
+        return "action_signal"
+    if any(marker in lowered for marker in ("context", "assistant")):
+        return "context_inferred"
+    return "user_explicit"
+
+
+def _infer_evidence_source_type(source: str, role: str) -> str:
+    return infer_evidence_source_type(source, role)

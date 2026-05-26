@@ -10,7 +10,9 @@ from typing import Any, Iterable
 from uuid import uuid5, NAMESPACE_URL
 
 from .backends import HeuristicBackend, PreferenceModelBackend, build_backend
+from .executive_summary import refresh_executive_summary
 from .models import Session, SessionMessage
+from .paths import default_candidate_dir, default_checkpoint_dir, default_store_path
 from .privacy import redact_sensitive
 from .quality import should_recall_user_text
 from .recall import MultiRouteRecallEngine, RecallCandidate, RecallConfig, RecallInput
@@ -58,7 +60,7 @@ class CaptureConfig:
     project_root: Path
     candidate_dir: Path
     checkpoint_dir: Path
-    store_path: Path = field(default_factory=lambda: Path("data") / "个人偏好.md")
+    store_path: Path = field(default_factory=default_store_path)
     mode: str = "recall-only"
     batch_size: int = 50
     max_minutes: float = 0.0
@@ -74,18 +76,16 @@ class CaptureConfig:
 
     @classmethod
     def from_env(cls, project_root: str | Path | None = None) -> "CaptureConfig":
-        app_root = Path(__file__).resolve().parents[1]
         root = Path(
             project_root
             or os.getenv("PREFERENCE_PROJECT_ROOT")
-            or app_root
+            or Path.cwd()
         )
-        data_dir = app_root / "data"
         return cls(
             project_root=root,
-            store_path=Path(os.getenv("PREFERENCE_STORE_PATH") or data_dir / "个人偏好.md"),
-            candidate_dir=Path(os.getenv("PREFERENCE_CANDIDATE_DIR") or data_dir / ".debug-capture"),
-            checkpoint_dir=Path(os.getenv("PREFERENCE_CHECKPOINT_DIR") or data_dir / ".capture-state"),
+            store_path=default_store_path(),
+            candidate_dir=default_candidate_dir(),
+            checkpoint_dir=default_checkpoint_dir(),
             mode=os.getenv("PREFERENCE_CAPTURE_MODE", "recall-only"),
             batch_size=_env_int("PREFERENCE_CAPTURE_BATCH_SIZE", 50),
             max_minutes=_env_float("PREFERENCE_CAPTURE_MAX_MINUTES", 0.0),
@@ -149,6 +149,9 @@ class CaptureJobResult:
     preferences_merged: int = 0
     preferences_replaced: int = 0
     preferences_conflicted: int = 0
+    executive_summary_file: str = ""
+    executive_summary_updated: bool = False
+    executive_summary_error: str = ""
     stopped_reason: str = "completed"
     profile: dict[str, Any] = field(default_factory=dict)
 
@@ -167,6 +170,7 @@ class CaptureRunner:
         source_path = Path(source)
         if not source_path.exists():
             raise FileNotFoundError(str(source_path))
+        self._changed_preference_ids: set[str] = set()
         job_id = _safe_job_id(source_path)
         candidate_file = self.config.candidate_dir / f"{job_id}-candidates.jsonl"
         extracted_file = self.config.candidate_dir / f"{job_id}-extracted.jsonl"
@@ -294,6 +298,7 @@ class CaptureRunner:
             {"line": committed_line, "completed": result.stopped_reason == "completed"},
             result,
         )
+        self._refresh_executive_summary(records, result)
         if self.config.debug_output:
             self._write_summary(summary_file, result)
         return result
@@ -516,6 +521,7 @@ class CaptureRunner:
         if not records_store:
             records_store.append(record)
             result.preferences_added += 1
+            self._mark_summary_changed(record)
             return
         decision = merger.merge_decision(record, records_store)
         action = str(decision.get("action", "new"))
@@ -526,17 +532,46 @@ class CaptureRunner:
         if action == "new" or not target:
             records_store.append(record)
             result.preferences_added += 1
+            self._mark_summary_changed(record)
         elif action == "replace":
             target.merge_from(record)
             target.status = "active"
             result.preferences_replaced += 1
+            self._mark_summary_changed(target)
         elif action == "merge":
             target.add_evidence_from(record)
             result.preferences_merged += 1
+            self._mark_summary_changed(target)
         else:
             record.status = "needs_review"
             records_store.append(record)
             result.preferences_conflicted += 1
+            self._mark_summary_changed(record)
+
+    def _mark_summary_changed(self, record: Any) -> None:
+        if not hasattr(self, "_changed_preference_ids"):
+            self._changed_preference_ids = set()
+        record_id = str(getattr(record, "id", "") or "")
+        if record_id:
+            self._changed_preference_ids.add(record_id)
+
+    def _refresh_executive_summary(self, records: list[Any], result: CaptureJobResult) -> None:
+        changed_ids = getattr(self, "_changed_preference_ids", set())
+        changed_records = [record for record in records if getattr(record, "id", "") in changed_ids]
+        backend = self.backend or (build_backend("auto") if self._use_model_extract() else None)
+        try:
+            update = refresh_executive_summary(
+                self.config.store_path,
+                changed_records=changed_records,
+                backend=backend,
+                force=False,
+            )
+        except Exception as exc:
+            result.executive_summary_error = str(exc)
+            return
+        result.executive_summary_file = update.path
+        result.executive_summary_updated = update.updated
+        result.executive_summary_error = update.error
 
     def _use_multi_recall(self) -> bool:
         strategy = self.config.recall_strategy.strip().lower()

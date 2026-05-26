@@ -6,6 +6,10 @@ from .models import PreferenceRecord
 
 
 GENERIC_APPLIES_TO = "当 agent 准备回复、执行任务或做确认决策时"
+GENERIC_APPLIES_TO_VALUES = {
+    GENERIC_APPLIES_TO,
+    "当 agent 需要选择回复方式或执行节奏时",
+}
 
 STABLE_SIGNAL_PATTERNS = (
     re.compile(r"(以后|以后默认|从现在开始|默认|每次|总是|我说过|记住|一定要)"),
@@ -26,6 +30,17 @@ ONE_OFF_PATTERNS = (
     re.compile(r"(帮我|请你|辛苦你|麻烦你|给我).{0,24}(看|查|改|修|录|创建|新建|安装|拉|推|上传|重启|测试|验证|检查)"),
     re.compile(r"(看这个|这个仓库|这个文件|这个 issue|这个项目|这个 PRD|这个页面|这张图|这段代码)"),
     re.compile(r"(录入|创建|新建|批量修改|推上来|拉下来|上传|重启|删除|挪动|黏贴|贴一份)"),
+    re.compile(r"(请问|检查以下代码|一直没有加载|预览但是|合成一个文件夹)"),
+    re.compile(r"(\.plugin|微信ide|obsidian本地目录|同一个代码仓库)"),
+)
+
+RAW_FRAGMENT_PATTERNS = (
+    re.compile(r"(^|[，。；\s])(我希望|我倾向|我觉得|我说了|我写在|我会|我要|我的|我刚|咱们|我们)"),
+    re.compile(r"(请问|检查以下代码|我稍微调整|请保留|找的是|读一遍metadata|每张卡片都问我|我要睡觉|刚做了一些修改)"),
+    re.compile(r"(^|[\s，。])=="),
+    re.compile(r"(^|[\s，。])>"),
+    re.compile(r"(\.plugin|微信ide|obsidian本地目录|这个配色|这个挺好看|这个文件夹|这张卡片)"),
+    re.compile(r"(后者估计|前者估计|那一段|不需要\*|^\s*B\s+而且必须无头)"),
 )
 
 GUIDANCE_TERMS = (
@@ -89,6 +104,11 @@ def looks_like_one_off_task(text: str) -> bool:
     return any(pattern.search(text) for pattern in ONE_OFF_PATTERNS)
 
 
+def looks_like_raw_user_fragment(text: str) -> bool:
+    cleaned = " ".join(str(text).split())
+    return any(pattern.search(cleaned) for pattern in RAW_FRAGMENT_PATTERNS)
+
+
 def should_recall_user_text(text: str) -> bool:
     cleaned = " ".join(str(text).split())
     if len(cleaned) < 6:
@@ -108,16 +128,28 @@ def should_recall_user_text(text: str) -> bool:
 def record_has_guidance_value(record: PreferenceRecord) -> bool:
     preference = " ".join(record.preference.split()).strip()
     applies_to = " ".join(record.applies_to.split()).strip()
+    combined = " ".join([record.title, record.summary, applies_to, preference, *record.triggers])
     if len(preference) < 8 or len(preference) > 220:
         return False
-    if applies_to == GENERIC_APPLIES_TO:
+    if applies_to in GENERIC_APPLIES_TO_VALUES or _has_generic_scope_prefix(preference):
+        return False
+    if looks_like_raw_user_fragment(preference):
         return False
     if looks_like_one_off_task(preference) or looks_like_one_off_task(applies_to):
         return False
     if re.search(r"https?://|[A-Za-z]:\\|\b[A-Z]{2,10}-\d+\b", preference, re.I):
         return False
-    if not has_guidance_terms(" ".join([record.title, record.summary, applies_to, preference, *record.triggers])):
+    if not has_guidance_terms(combined):
         return False
     if preference.startswith(("帮我", "请你", "辛苦你", "麻烦你", "给我")):
         return False
     return True
+
+
+def _has_generic_scope_prefix(preference: str) -> bool:
+    return any(
+        preference == scope
+        or preference.startswith(f"{scope}，")
+        or preference.startswith(f"{scope},")
+        for scope in GENERIC_APPLIES_TO_VALUES
+    )

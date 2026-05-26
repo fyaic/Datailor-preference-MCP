@@ -1,15 +1,17 @@
 [project]
-name = "bondie-preference-mcp"
+name = "datailor-preference-mcp"
 version = "0.1.0"
 description = "Local-first personal preference MCP with Markdown store, capture pipeline, injection, and UI"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-preference-agent = "preference_agent.cli:main"
+datailor = "preference_agent.cli:main"
+datailor-mcp = "preference_agent.mcp_server:main"
 
 [tool.setuptools.packages.find]
 include = ["preference_agent*"]
 
 [tool.setuptools.package-data]
 "preference_agent.ui" = ["static/*"]
+"preference_agent.resources" = ["*.md"]

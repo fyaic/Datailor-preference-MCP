@@ -6,7 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from .backends import PreferenceModelBackend, build_backend
-from .models import PreferenceRecord, now_iso
+from .decision_conflicts import apply_decision_conflict_policy
+from .executive_summary import refresh_executive_summary
+from .injection_log import log_injection_event
+from .models import PreferenceRecord, Session, now_iso
+from .refinement import refine_records
 from .session_loader import load_sessions
 from .store import MarkdownPreferenceStore
 
@@ -21,6 +25,10 @@ class CaptureResult:
     replaced: list[str] = field(default_factory=list)
     conflicts: list[str] = field(default_factory=list)
     dry_run: bool = False
+    filtered_candidates: int = 0
+    executive_summary_file: str = ""
+    executive_summary_updated: bool = False
+    executive_summary_error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -32,6 +40,10 @@ class CaptureResult:
             "replaced": self.replaced,
             "conflicts": self.conflicts,
             "dry_run": self.dry_run,
+            "filtered_candidates": self.filtered_candidates,
+            "executive_summary_file": self.executive_summary_file,
+            "executive_summary_updated": self.executive_summary_updated,
+            "executive_summary_error": self.executive_summary_error,
         }
 
 
@@ -50,18 +62,58 @@ class PreferenceEngine:
         self.store.ensure()
 
     def capture_path(self, source: str | Path, dry_run: bool = False) -> CaptureResult:
+        sessions = load_sessions(source)
+        return self.capture_sessions(sessions, source=str(source), dry_run=dry_run)
+
+    def capture_session(self, session: Session, dry_run: bool = False) -> CaptureResult:
+        return self.capture_sessions([session], source=session.source, dry_run=dry_run)
+
+    def capture_records(
+        self,
+        records: list[PreferenceRecord],
+        source: str = "direct-records",
+        dry_run: bool = False,
+    ) -> CaptureResult:
+        self.store.ensure()
+        existing = self.store.load()
+        result = CaptureResult(source=source, dry_run=dry_run)
+        result.sessions_seen = 1
+        result.candidates_seen = len(records)
+        candidates = refine_records(records)
+        result.filtered_candidates += len(records) - len(candidates)
+        changed_records: list[PreferenceRecord] = []
+        for candidate in candidates:
+            changed = self._apply_candidate(candidate, existing, result)
+            if changed is not None:
+                changed_records.append(changed)
+        if not dry_run:
+            self.store.save(existing)
+            self._refresh_executive_summary(changed_records, result)
+        return result
+
+    def capture_sessions(
+        self,
+        sessions: list[Session],
+        source: str,
+        dry_run: bool = False,
+    ) -> CaptureResult:
         self.store.ensure()
         records = self.store.load()
-        result = CaptureResult(source=str(source), dry_run=dry_run)
-        sessions = load_sessions(source)
+        result = CaptureResult(source=source, dry_run=dry_run)
         result.sessions_seen = len(sessions)
+        changed_records: list[PreferenceRecord] = []
         for session in sessions:
-            candidates = self._extract(session)
-            result.candidates_seen += len(candidates)
+            extracted = self._extract(session)
+            result.candidates_seen += len(extracted)
+            candidates = refine_records(extracted)
+            result.filtered_candidates += len(extracted) - len(candidates)
             for candidate in candidates:
-                self._apply_candidate(candidate, records, result)
+                changed = self._apply_candidate(candidate, records, result)
+                if changed is not None:
+                    changed_records.append(changed)
         if not dry_run:
             self.store.save(records)
+            self._refresh_executive_summary(changed_records, result)
         return result
 
     def decide(
@@ -69,6 +121,7 @@ class PreferenceEngine:
         task: str,
         context: dict[str, Any] | None = None,
         agent: str = "agent",
+        log_event: bool = True,
     ) -> dict[str, Any]:
         self.store.ensure()
         records = self.store.load()
@@ -80,6 +133,23 @@ class PreferenceEngine:
                 raise
             decision = self.fallback_backend.decide(task=task, context=context or {}, records=records, agent=agent)
             decision["backend_error"] = str(exc)
+        decision = apply_decision_conflict_policy(
+            decision,
+            records=records,
+            store_path=self.store.path,
+            task=task,
+            context=context or {},
+        )
+        if log_event:
+            log_injection_event(
+                store_path=self.store.path,
+                hook=str((context or {}).get("hook") or "decide"),
+                agent=agent,
+                task=task,
+                context=context or {},
+                decision=decision,
+                source="engine",
+            )
         decision.setdefault("store", str(self.store.path))
         decision.setdefault("checked_at", now_iso())
         return decision
@@ -97,7 +167,7 @@ class PreferenceEngine:
         candidate: PreferenceRecord,
         records: list[PreferenceRecord],
         result: CaptureResult,
-    ) -> None:
+    ) -> PreferenceRecord | None:
         decision = self.backend.merge_decision(candidate, records) if records else {"action": "new"}
         action = str(decision.get("action", "new"))
         target_id = decision.get("target_id")
@@ -105,15 +175,15 @@ class PreferenceEngine:
         if action == "new" or not target:
             records.append(candidate)
             result.added.append(candidate.id)
-            return
+            return candidate
         if action == "merge":
             target.add_evidence_from(candidate)
             result.merged.append(target.id)
-            return
+            return target
         if action == "replace":
             target.merge_from(candidate)
             result.replaced.append(target.id)
-            return
+            return target
         if action == "conflict":
             note = decision.get("reason") or "发现同类场景下的不一致偏好"
             target.conflict_notes.append(
@@ -123,9 +193,25 @@ class PreferenceEngine:
             target.status = "needs_review"
             target.touch()
             result.conflicts.append(target.id)
-            return
+            return target
         records.append(candidate)
         result.added.append(candidate.id)
+        return candidate
+
+    def _refresh_executive_summary(self, changed_records: list[PreferenceRecord], result: CaptureResult) -> None:
+        try:
+            update = refresh_executive_summary(
+                self.store.path,
+                changed_records=changed_records,
+                backend=self.backend,
+                force=False,
+            )
+        except Exception as exc:
+            result.executive_summary_error = str(exc)
+            return
+        result.executive_summary_file = update.path
+        result.executive_summary_updated = update.updated
+        result.executive_summary_error = update.error
 
 
 def parse_context(text: str | None) -> dict[str, Any]:
@@ -144,4 +230,3 @@ def parse_context(text: str | None) -> dict[str, Any]:
                 pairs[key.strip()] = value.strip()
         return pairs
     return value if isinstance(value, dict) else {"value": value}
-

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .capture_runner import CaptureConfig, CaptureRunner
 from .models import now_iso
+from .paths import default_incremental_state as default_incremental_state_path
 from .session_loader import SUPPORTED_EXTENSIONS
 
 
@@ -26,10 +26,7 @@ class IncrementalScanResult:
 
 
 def default_incremental_state() -> Path:
-    path = os.getenv("PREFERENCE_INCREMENTAL_STATE")
-    if path:
-        return Path(path)
-    return Path(__file__).resolve().parents[1] / "data" / ".capture-state" / "incremental-scan.json"
+    return default_incremental_state_path()
 
 
 def scan_incremental(
@@ -38,6 +35,7 @@ def scan_incremental(
     state_file: str | Path | None = None,
     dry_run: bool = False,
     max_files: int = 0,
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> IncrementalScanResult:
     source_path = Path(source)
     if not source_path.exists():
@@ -55,10 +53,23 @@ def scan_incremental(
         if changed_state.get(key) == signature:
             continue
         result.changed_files.append(str(file_path))
+        _emit(progress, {"event": "file_start", "file": str(file_path), "source": str(source_path)})
         if not dry_run:
+            _emit(progress, {"event": "capture_stage", "file": str(file_path), "source": str(source_path)})
             capture = runner.run(file_path)
             result.capture_results.append(capture.to_dict())
             changed_state[key] = signature
+            _emit(
+                progress,
+                {
+                    "event": "file_done",
+                    "file": str(file_path),
+                    "source": str(source_path),
+                    "capture": capture.to_dict(),
+                },
+            )
+        else:
+            _emit(progress, {"event": "file_done", "file": str(file_path), "source": str(source_path), "dry_run": True})
         if max_files and len(result.changed_files) >= max_files:
             break
     if not dry_run:
@@ -68,6 +79,11 @@ def scan_incremental(
             encoding="utf-8",
         )
     return result
+
+
+def _emit(progress: Callable[[dict[str, Any]], None] | None, event: dict[str, Any]) -> None:
+    if progress:
+        progress(event)
 
 
 def _iter_session_files(source: Path) -> list[Path]:

@@ -81,10 +81,32 @@ h3 {
   font-weight: 400;
 }
 
+.masthead-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: start;
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.language-switcher {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  margin-top: 4px;
+}
+
+.language-switcher button {
+  border: 0;
+  min-width: 42px;
+}
+
+.language-switcher button + button {
+  border-left: 1px solid var(--line);
 }
 
 button,
@@ -118,35 +140,156 @@ input {
 }
 
 .summary {
-  margin-bottom: 32px;
+  margin-bottom: 48px;
+}
+
+.executive-copy {
+  margin-bottom: 18px;
+}
+
+.executive-copy p {
+  margin-bottom: 10px;
+}
+
+.executive-copy ul {
+  margin: 0 0 14px 22px;
+  padding: 0;
+}
+
+.executive-copy li {
+  margin-bottom: 6px;
 }
 
 .summary dl {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  border-top: 2px solid var(--line);
-  border-bottom: 2px solid var(--line);
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+  border-top: 1px solid var(--soft);
+  border-bottom: 1px solid var(--soft);
+  padding: 18px 0;
   margin: 0 0 12px;
 }
 
-.summary div {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--soft);
+.summary dl > div {
+  text-align: center;
+  padding: 0;
+  border-bottom: none;
 }
 
 .summary dt {
   color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .summary dd {
-  margin: 0;
-  font-size: 24px;
+  margin: 0 0 6px;
+  font-size: 32px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .remark {
   color: var(--muted);
-  font-size: 14px;
+  font-size: 13px;
   word-break: break-all;
+}
+
+/* ── Injection Log (entry list, not table) ── */
+.injection-list {
+  border-top: 2px solid var(--line);
+}
+
+.injection-entry {
+  border-bottom: 1px solid var(--soft);
+  padding: 16px 0;
+}
+
+.injection-entry:last-child {
+  border-bottom: 2px solid var(--line);
+}
+
+.injection-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  align-items: baseline;
+  margin-bottom: 12px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.injection-time {
+  font-weight: 400;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.injection-tag {
+  color: var(--muted);
+}
+
+.injection-tag::before {
+  content: attr(data-label) ": ";
+  color: var(--muted);
+}
+
+.injection-body {
+  display: grid;
+  gap: 10px;
+}
+
+.injection-field {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+.injection-field dt {
+  color: var(--muted);
+  font-size: 13px;
+  text-align: right;
+  line-height: 1.5;
+  padding-top: 1px;
+}
+
+.injection-field dd {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.instruction-block {
+  font-family: "Latin Modern Mono", "Computer Modern Typewriter", "Courier New", monospace;
+  font-size: 14px;
+  background: var(--soft);
+  padding: 10px 14px;
+  border-left: 3px solid var(--line);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.matched-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.matched-list li {
+  font-size: 14px;
+}
+
+.matched-list li:not(:last-child)::after {
+  content: "·";
+  margin-left: 10px;
+  color: var(--muted);
 }
 
 .section-heading {
@@ -187,6 +330,56 @@ input {
   max-width: 56ch;
 }
 
+.confidence-cell {
+  display: grid;
+  gap: 4px;
+  min-width: 82px;
+}
+
+.confidence-cell meter {
+  width: 82px;
+  height: 8px;
+}
+
+.confidence-cell span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.detail-confidence {
+  margin-top: 8px;
+}
+
+.factor-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.factor-grid div {
+  border-top: 1px solid var(--soft);
+  padding-top: 6px;
+}
+
+.factor-grid dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.factor-grid dd {
+  margin: 0;
+}
+
+.compact-list {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.compact-list li {
+  margin-bottom: 4px;
+}
+
 .details {
   border: 1px solid var(--line);
   padding: 12px;
@@ -212,6 +405,93 @@ input {
   margin-top: 12px;
 }
 
+.conflict-board {
+  border-top: 2px solid var(--line);
+}
+
+.conflict-pair {
+  border-bottom: 2px solid var(--line);
+  padding: 16px 0 20px;
+}
+
+.conflict-header {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.conflict-header h3 {
+  margin: 0;
+}
+
+.conflict-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.conflict-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px minmax(0, 1fr);
+  border: 1px solid var(--line);
+}
+
+.conflict-side {
+  min-width: 0;
+  padding: 14px;
+}
+
+.conflict-vs {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 14px;
+  text-transform: uppercase;
+}
+
+.side-label {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.conflict-statement {
+  font-size: 20px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.side-facts {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0 0;
+}
+
+.side-facts div {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.side-facts dt {
+  color: var(--muted);
+}
+
+.side-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.compact {
+  margin-bottom: 0;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -229,10 +509,44 @@ input {
 
   .summary dl {
     grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .masthead-row {
+    display: block;
+  }
+
+  .language-switcher {
+    margin-bottom: 14px;
   }
 
   .section-heading {
     display: block;
+  }
+
+  .factor-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .conflict-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .conflict-vs {
+    min-height: 40px;
+    border-left: 0;
+    border-right: 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .injection-field {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .injection-field dt {
+    text-align: left;
   }
 
   .table,
@@ -256,4 +570,25 @@ input {
     border-bottom: 1px solid var(--line);
     padding: 8px 0;
   }
+}
+
+/* ── Transition animations ── */
+#content {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+#content.switching {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.page {
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+
+.page.switching {
+  opacity: 0;
 }

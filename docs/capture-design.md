@@ -2,7 +2,7 @@
 
 ## 冷启动
 
-新安装时 `data/个人偏好.md` 只包含结构，不包含任何真实偏好。此时：
+新安装时用户级数据目录中的 `个人偏好.md` 只包含结构，不包含任何真实偏好。默认位置为 Windows `%APPDATA%\Datailor\个人偏好.md`，macOS `~/Library/Application Support/Datailor/个人偏好.md`，Linux `${XDG_DATA_HOME:-~/.local/share}/datailor/个人偏好.md`。此时：
 
 - `decide` 返回 `decision: no_preference`。
 - agent 应按原流程询问用户或继续当前任务。
@@ -23,7 +23,7 @@
   -> 归一化为 role/content messages
   -> 模型提取候选偏好
   -> 与空偏好库合并
-  -> 写入 Markdown JSON 记录块
+  -> 写入人类可读的 Markdown 偏好条目
 ```
 
 提取标准：
@@ -62,4 +62,3 @@
 - 是否写清适用场景、触发意图、例外条件。
 - 是否存在把临时任务误判为长期偏好的情况。
 - 中文和 Markdown 结构是否完整。
-

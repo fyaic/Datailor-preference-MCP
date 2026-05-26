@@ -1,62 +1,174 @@
-# Bondie Preference MCP
+# Datailor Preference MCP
 
-本仓库是一个本地优先的个人偏好代言系统 POC：从历史会话中提取用户长期偏好，写入人类可读的 Markdown，并通过 MCP/CLI/本地 UI 让任意 agent 在回复或执行前读取这些偏好。
+Datailor 是本地优先的个人偏好代言系统 POC。它从历史会话和实时 hook 中提取长期、稳定、可复用的用户偏好，写入人类可读的 `个人偏好.md`，并通过 MCP、CLI 和本地 Manifesto UI 让 agent 在回复或执行前读取这些偏好。
 
-V0 的重点不是“记忆一切”，而是验证一条可控链路：
+V0 的目标不是“记住一切”，而是验证一条可控链路：
 
-- 冷启动时偏好库为空，不伪造用户偏好。
-- 只把稳定、可复用、对未来 agent 行为有指导价值的内容写入偏好库。
+- 冷启动时偏好库可以为空，不伪造用户偏好。
+- 只沉淀稳定、可复用、对未来 agent 行为有指导价值的偏好。
 - 过滤一次性任务、路径、URL、issue 编号、密钥、泛用假条件和用户原文照抄。
-- 用 Markdown 作为唯一官方偏好源，便于人和模型共同读取。
-- 通过 MCP 工具、CLI 和静态注入文件，把偏好实际应用到 agent 工作流里。
-
-## 当前能力
-
-- `capture-job`：流式扫描大型 JSONL / session 文件，支持 checkpoint 断点恢复。
-- `recall-extract`：先召回候选，再调用 OpenAI-compatible 模型精提成可复用偏好。
-- `semantic-extract`：支持 embedding 召回 + 模型精提，适合更高质量的长跑。
-- `decide`：给定当前任务，返回应应用的偏好和 agent 指令。
-- MCP stdio server：暴露偏好决策、捕获、反馈、注入同步和 UI 打开工具。
-- 本地 Manifesto UI：以 HTML 面板查看 active / pending / conflict / feedback。
-- 注入层：生成 `preference_rules.md`、session prewarm cache 和 fallback rules。
-- 反馈闭环：记录用户确认、拒绝、纠正和使用反馈。
+- `个人偏好.md` 是唯一官方偏好源，Executive Summary 和 UI 都是派生视图。
+- 通过 MCP 工具、CLI、AGENTS managed block 和注入日志，把偏好真正接入 agent 工作流。
 
 ## 安装
 
+面向普通用户，推荐用 `pipx` 从 GitHub 安装。安装后 `datailor` 和 `datailor-mcp` 都会进入独立命令行环境，不依赖本地源码目录。
+
 ```powershell
-git clone https://github.com/fyaic/bondie-preference-MCP.git
-cd bondie-preference-MCP
+python -m pip install --user pipx
+python -m pipx ensurepath
+pipx install git+https://github.com/fyaic/bondie-preference-MCP.git
+```
+
+检查安装：
+
+```powershell
+datailor doctor --agent codex
+```
+
+开发者安装：
+
+```powershell
+git clone https://github.com/fyaic/bondie-preference-MCP.git datailor-preference-mcp
+cd datailor-preference-mcp
 python -m pip install -e .
 ```
 
-需要 Python 3.11+。仓库没有强制第三方依赖；云模型、embedding 和本地模型都通过环境变量接入。
-
-## 快速试跑
+升级和卸载：
 
 ```powershell
-python -m preference_agent.cli init --store ".\tmp-preferences.md"
-python -m preference_agent.cli capture --store ".\tmp-preferences.md" --source ".\examples\cold_start_session.md"
-python -m preference_agent.cli decide --store ".\tmp-preferences.md" --agent codex --task "代码实现完成后准备回复用户"
+pipx upgrade datailor-preference-mcp
+pipx uninstall datailor-preference-mcp
 ```
 
-预期结果：`tmp-preferences.md` 中出现泛化后的偏好句，而不是用户原话。
+## 默认数据目录
 
-## 环境变量
+Datailor 默认把运行数据写到用户级目录，而不是仓库内的 `data\`。这让 pipx 安装、源码安装和 MCP 客户端调用都使用同一份偏好库。
 
-复制模板后填写本地配置：
+| 系统 | 默认目录 |
+| --- | --- |
+| Windows | `%APPDATA%\Datailor` |
+| macOS | `~/Library/Application Support/Datailor` |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/datailor` |
+
+默认官方偏好源：
+
+```text
+%APPDATA%\Datailor\个人偏好.md
+```
+
+可以用环境变量覆盖：
 
 ```powershell
-Copy-Item .env.example .env.local
-notepad .env.local
+$env:DATAILOR_DATA_DIR = "D:\Datailor"
+$env:PREFERENCE_STORE_PATH = "D:\Datailor\个人偏好.md"
 ```
 
-加载环境变量：
+## 首次启动
+
+先看当前状态：
 
 ```powershell
-.\scripts\Load-PreferenceEnv.ps1
+datailor doctor --agent codex
 ```
 
-本地模型示例：
+冷启动扫描本地 agent 历史：
+
+```powershell
+datailor onboard --agent codex --mode recall-extract
+```
+
+`onboard` 会创建默认 `个人偏好.md`、发现 Claude / Codex / Kimi 历史、按最近活跃和当前 agent 排序、执行增量扫描，并给出下一步命令。
+
+把 Datailor 调用规则写入全局 `AGENTS.md`：
+
+```powershell
+datailor install-agent-rules
+```
+
+打开本地 Manifesto UI：
+
+```powershell
+datailor ui
+```
+
+`/preferences` 只是支持 MCP prompts 的客户端上的可选增强。Codex CLI、Kimi CLI 等通常只识别自己的命令系统，所以通用入口是 `datailor doctor`、`datailor onboard` 和 `datailor ui`。
+
+## MCP 配置
+
+生成当前 agent 的 MCP 配置：
+
+```powershell
+datailor mcp-config --agent codex
+```
+
+输出示例：
+
+```json
+{
+  "mcpServers": {
+    "datailor-preference": {
+      "command": "datailor-mcp",
+      "args": ["--agent", "codex"],
+      "env": {
+        "PREFERENCE_MODEL_BACKEND": "heuristic"
+      }
+    }
+  }
+}
+```
+
+如果你显式传入 `--store`，生成结果会包含 `PREFERENCE_STORE_PATH`：
+
+```powershell
+datailor mcp-config --agent kimi --store "D:\Datailor\个人偏好.md"
+```
+
+源码开发时也推荐使用 `datailor-mcp`，不要让 MCP 配置绑定仓库 `cwd` 或 `python -m preference_agent.mcp_server`。
+
+## 冷启动扫描
+
+独立运行冷启动扫描：
+
+```powershell
+datailor cold-start-scan --agent codex --mode recall-extract
+```
+
+默认输出面向人类，会实时显示发现了哪些 sources、正在扫描哪个 source、候选数、新增数、合并数、冲突数和跳过原因。自动化脚本使用 JSON：
+
+```powershell
+datailor cold-start-scan --agent codex --mode recall-extract --json
+```
+
+只看最终状态：
+
+```powershell
+datailor cold-start-scan --agent codex --quiet
+```
+
+支持参数：
+
+- `--dry-run`：只演练，不写入偏好库。
+- `--max-files`：调试或应急时限制文件数，默认不限制。
+- `--max-minutes`：限制单个 source 的运行时间，默认不限制。
+
+## 真实捕获
+
+正式捕获不建议用 `recall-only` 写库。`recall-only` 只适合离线单测和排查召回问题。真实捕获优先使用 `recall-extract` 或 `semantic-extract`。
+
+```powershell
+$env:PREFERENCE_CAPTURE_MODE = "recall-extract"
+$env:PREFERENCE_CAPTURE_AGENT_RULES = "0"
+datailor capture-job --source "C:\path\to\history.jsonl" --max-minutes 10
+```
+
+长跑可以反复执行同一命令。runner 会使用用户数据目录下的 `.capture-state\*.checkpoint.json` 断点恢复，只有候选完成精提并写库后才推进 checkpoint，避免中断后漏提取。
+
+Kimi Code 的 `user-history` JSONL 常见格式是只有 `content` 字段、没有 `role` 字段。Datailor 会把这种 content-only JSONL 按用户输入处理。
+
+## 模型配置
+
+默认后端是 `heuristic`，不依赖 API。接云模型或本地模型时使用 OpenAI-compatible 配置：
 
 ```powershell
 $env:PREFERENCE_MODEL_BACKEND = "openai-compatible"
@@ -65,62 +177,30 @@ $env:PREFERENCE_MODEL_API_KEY = "local"
 $env:PREFERENCE_MODEL_NAME = "qwen2.5:7b"
 ```
 
-云模型也使用同一套 OpenAI-compatible 接口。不要提交 `.env.local`，仓库已默认忽略。
-
-## 冷启动捕获
-
-正式冷启动不要用 `recall-only` 直接写库。`recall-only` 只适合离线单元测试或排查召回问题；真实捕获应使用 `recall-extract` 或 `semantic-extract`。
+云模型示例：
 
 ```powershell
-$env:PREFERENCE_CAPTURE_MODE = "recall-extract"
-$env:PREFERENCE_CAPTURE_AGENT_RULES = "0"
-$env:PREFERENCE_RECALL_STRATEGY = "keyword"
-python -m preference_agent.cli capture-job --source "C:\path\to\history.jsonl" --max-minutes 10
+$env:PREFERENCE_MODEL_BACKEND = "openai-compatible"
+$env:PREFERENCE_MODEL_BASE_URL = "https://api.moonshot.ai/v1"
+$env:PREFERENCE_MODEL_API_KEY = "replace-me"
+$env:PREFERENCE_MODEL_NAME = "Kimi-K2.5"
 ```
 
-长跑可以反复执行同一命令。runner 会使用 `data\.capture-state\*.checkpoint.json` 断点恢复，只有候选完成精提并写库后才推进 checkpoint，避免中断后漏提取。
-
-## Kimi Code 历史
-
-Kimi Code 的 `user-history` JSONL 常见格式是只有 `content` 字段、没有 `role` 字段。本项目会把这种 content-only JSONL 按用户输入处理。
+Embedding 可选，用于语义召回：
 
 ```powershell
-.\scripts\Load-PreferenceEnv.ps1
-$env:PREFERENCE_CAPTURE_MODE = "recall-extract"
-$env:PREFERENCE_CAPTURE_AGENT_RULES = "0"
-$env:PREFERENCE_RECALL_STRATEGY = "keyword"
-
-Get-ChildItem "$HOME\.kimi\user-history\*.jsonl" | ForEach-Object {
-  python -m preference_agent.cli capture-job --source $_.FullName --max-minutes 10
-}
+$env:PREFERENCE_EMBEDDING_BACKEND = "glm"
+$env:PREFERENCE_EMBEDDING_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+$env:PREFERENCE_EMBEDDING_API_KEY = "replace-me"
+$env:PREFERENCE_EMBEDDING_MODEL = "embedding-3"
 ```
 
-V0 在真实 Kimi Code 历史上的一次验收结果：最大文件完整 completed，最终写入 36 条模型精提偏好，其中 23 条 active、13 条待审；质量检查未发现泛用假条件、路径、URL、issue 编号或一次性任务词。
-
-## MCP 配置
-
-```json
-{
-  "mcpServers": {
-    "bondie-preference": {
-      "command": "python",
-      "args": ["-m", "preference_agent.mcp_server"],
-      "cwd": "C:\\path\\to\\bondie-preference-MCP",
-      "env": {
-        "PREFERENCE_STORE_PATH": "C:\\path\\to\\bondie-preference-MCP\\data\\个人偏好.md",
-        "PREFERENCE_MODEL_BACKEND": "heuristic"
-      }
-    }
-  }
-}
-```
-
-建议把 [docs/AGENTS-snippet.md](docs/AGENTS-snippet.md) 追加到 Codex、OpenClaw 或其他 agent 的系统规则里，要求 agent 在回复、执行、写入外部系统或询问确认前读取偏好。
+不要提交 `.env.local` 或任何 API key。
 
 ## 本地 UI
 
 ```powershell
-python -m preference_agent.cli ui --no-open
+datailor ui --no-open
 ```
 
 默认地址：
@@ -129,49 +209,73 @@ python -m preference_agent.cli ui --no-open
 http://127.0.0.1:8080
 ```
 
-UI 只绑定 localhost，不对外暴露。它读取 `data\个人偏好.md`，提供 active/pending/conflict/feedback 统计、Manifesto 视图、主题切换和反馈入口。
+UI 只绑定 localhost。它读取官方 `个人偏好.md`，展示 active / pending / conflict / feedback 统计、Manifesto 视图、Executive Summary、中英文切换、冲突 A/B 对比和反馈入口。
 
-## 注入层
+UI 反馈会真实修改官方偏好源：
+
+- Confirm：把待观察偏好提升为 `active`。
+- Reject：从 `个人偏好.md` 中移除该偏好。
+- Correct：用用户输入改写偏好文本并标记为已确认。
+
+每次覆盖 Markdown store 前会自动生成快照，变更后会刷新 Executive Summary。feedback JSONL 只作为审计和演化记录。
+
+## 注入与可观测性
+
+MCP 暴露了偏好决策、冷启动、捕获、反馈、hook、冲突处理和 UI 打开工具。常用工具包括：
+
+- `get_onboarding_status`
+- `get_preference_decision`
+- `hook_session_start`
+- `hook_user_message`
+- `hook_turn_complete`
+- `hook_action_executed`
+- `hook_session_end`
+- `report_preference_feedback`
+- `resolve_preference_conflict`
+- `open_preference_panel`
+
+所有 `decide` / hook / prewarm 调用都会写入注入日志。Manifesto UI 的 Injection Log 会展示时间、agent、session、命中的偏好和实际注入的 `agent_instruction`，用于验证偏好是否真的进入 agent 工作流。
+
+静态注入产物可以手动同步：
 
 ```powershell
-python -m preference_agent.cli sync-injection
-python -m preference_agent.cli prewarm --agent codex --task "代码实现完成后准备回复用户"
+datailor sync-injection
+datailor prewarm --agent codex --task "代码实现完成后准备回复用户"
 ```
 
-生成文件：
+这些产物是生成视图，不是新的偏好源。唯一官方源仍然是 `个人偏好.md`。
 
-- `data\.injection\preference_rules.md`
-- `data\.injection\fallback_rules.md`
-- `data\.injection\fallback_rules.json`
-- `data\.injection\snapshots\global-default.md`
+## 冲突处理
 
-这些是生成视图，不是新的偏好源。唯一官方源仍然是 `data\个人偏好.md`。
+`decide` 在返回 agent 指令前会检查本轮命中的 active 偏好是否互相冲突。如果冲突不能同时成立，系统不会把矛盾规则拼接给 agent，而是返回 `decision=escalate`，要求 agent 简短反问用户本次采用哪条偏好，或是否两条都不适用。
 
-## 反馈与增量捕获
+Datailor 会记录已询问的冲突组合，并按冷却时间避免同一个冲突反复问。用户回答后，agent 调用 `resolve_preference_conflict` 更新偏好状态并标记该冲突已处理。
+
+## 版本与恢复
 
 ```powershell
-python -m preference_agent.cli feedback `
-  --type correction `
-  --preference "默认先给大纲" `
-  --user-feedback "这次不用大纲，直接给完整方案。"
-
-python -m preference_agent.cli feedback-report
-python -m preference_agent.cli incremental-scan --source "C:\path\to\sessions" --mode recall-extract
+datailor snapshots
+datailor restore-snapshot --snapshot "C:\path\to\.snapshots\20260525-120000-000000-pre-save.md"
 ```
+
+`个人偏好.md` 仍然是唯一官方偏好源；自动快照只用于恢复。默认每次覆盖已存在的 Markdown store 前，系统会在同目录的 `.snapshots\` 下保存一份旧版本。
 
 ## 数据与隐私
 
-仓库默认忽略运行态数据：
+仓库默认忽略运行态数据和本地配置：
 
 - `.env.local`
-- `data\个人偏好.md`
-- `data\.capture-state\`
-- `data\.debug-capture\`
-- `data\.feedback\`
-- `data\.injection\`
-- `data\.ui\`
+- `data\`
+- `.capture-state\`
+- `.debug-capture\`
+- `.feedback\`
+- `.hooks\`
+- `.injection\`
+- `.snapshots\`
+- `.summary\`
+- `.ui\`
 
-本地真实偏好、历史会话、debug 输出和 API key 不应提交到 Git。代码层也会在写入前清理常见密钥形状和替换字符。
+真实偏好、历史会话、debug 输出和 API key 不应提交到 Git。代码层在写入前会清理常见密钥形状和替换字符。
 
 ## 测试
 
@@ -179,4 +283,4 @@ python -m preference_agent.cli incremental-scan --source "C:\path\to\sessions" -
 python -m pytest -q
 ```
 
-当前 V0 回归：25 个测试通过。
+当前回归：`72 passed`。

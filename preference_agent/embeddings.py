@@ -9,6 +9,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from .paths import default_embedding_cache_path
+
 
 def cosine_similarity(left: list[float], right: list[float]) -> float:
     if not left or not right or len(left) != len(right):
@@ -174,11 +176,7 @@ def build_embedding_backend(name: str | None = None) -> EmbeddingBackend:
 
 
 def _default_cache_path() -> Path:
-    path = os.getenv("PREFERENCE_EMBEDDING_CACHE_PATH")
-    if path:
-        return Path(path)
-    root = Path(__file__).resolve().parents[1]
-    return root / "data" / ".capture-state" / "embedding-cache.json"
+    return default_embedding_cache_path()
 
 
 def _normalize_text(text: str) -> str:

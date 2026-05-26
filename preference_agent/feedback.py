@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from .models import now_iso
+from .paths import default_feedback_log as default_feedback_log_path
 
 
 @dataclass
@@ -28,10 +28,7 @@ class PreferenceFeedback:
 
 
 def default_feedback_log() -> Path:
-    path = os.getenv("PREFERENCE_FEEDBACK_LOG")
-    if path:
-        return Path(path)
-    return Path(__file__).resolve().parents[1] / "data" / ".feedback" / "feedback-log.jsonl"
+    return default_feedback_log_path()
 
 
 def record_feedback(
