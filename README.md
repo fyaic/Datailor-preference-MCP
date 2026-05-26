@@ -209,7 +209,16 @@ datailor ui --no-open
 http://127.0.0.1:8080
 ```
 
-UI 只绑定 localhost。它读取官方 `个人偏好.md`，展示 active / pending / conflict / feedback 统计、Manifesto 视图、Executive Summary、中英文切换、冲突 A/B 对比和反馈入口。
+UI 只绑定 localhost。它读取官方 `个人偏好.md`，展示：
+
+- **Dashboard**：active / pending / conflict / feedback 统计与 Executive Summary
+- **Manifesto**：完整偏好列表（active / pending / conflict / feedback）
+- **Injection Log**：每次偏好注入的时间线——命中了哪些偏好、生成了什么 `agent_instruction`、是否真正注入
+- **冲突 A/B 对比**：左右分栏查看冲突双方
+- **反馈入口**：Confirm / Reject / Correct
+- **中英文切换**
+
+所有 `decide` / hook / prewarm 调用都会写入 `.injection-log.jsonl`，Injection Log 标签页将其解析为可读时间线，用于验证偏好是否真的进入 agent 工作流。
 
 UI 反馈会真实修改官方偏好源：
 
@@ -221,18 +230,25 @@ UI 反馈会真实修改官方偏好源：
 
 ## 注入与可观测性
 
-MCP 暴露了偏好决策、冷启动、捕获、反馈、hook、冲突处理和 UI 打开工具。常用工具包括：
+MCP 暴露了偏好决策、冷启动、捕获、反馈、hook、冲突处理和 UI 打开工具。完整工具列表：
 
-- `get_onboarding_status`
-- `get_preference_decision`
-- `hook_session_start`
-- `hook_user_message`
-- `hook_turn_complete`
-- `hook_action_executed`
-- `hook_session_end`
-- `report_preference_feedback`
-- `resolve_preference_conflict`
-- `open_preference_panel`
+| 工具 | 说明 |
+|------|------|
+| `get_onboarding_status` | 检查首次配置状态 |
+| `get_preference_decision` | 在 agent 行动前读取用户偏好 |
+| `start_cold_start_capture` | 启动冷启动捕获（等价于 CLI `onboard`） |
+| `capture_preferences_from_session` | 从指定 session 文件捕获偏好 |
+| `discover_agents` | 检测本机已安装的 agent 历史源 |
+| `prewarm_preferences` | 预热 session 级偏好缓存 |
+| `hook_session_start` | H1：session 开始 hook |
+| `hook_user_message` | H2：用户消息到达 hook |
+| `hook_turn_complete` | H3：turn 完成 hook |
+| `hook_action_executed` | H4：行为信号 hook |
+| `hook_session_end` | H5：session 结束 hook |
+| `sync_preference_injection` | 生成静态规则并同步到 AGENTS.md |
+| `report_preference_feedback` | 记录用户反馈（确认/纠正/拒绝/使用） |
+| `resolve_preference_conflict` | 标记冲突已解决并更新偏好状态 |
+| `open_preference_panel` | 打开本地 Manifesto UI 面板 |
 
 所有 `decide` / hook / prewarm 调用都会写入注入日志。Manifesto UI 的 Injection Log 会展示时间、agent、session、命中的偏好和实际注入的 `agent_instruction`，用于验证偏好是否真的进入 agent 工作流。
 
@@ -283,4 +299,4 @@ datailor restore-snapshot --snapshot "C:\path\to\.snapshots\20260525-120000-0000
 python -m pytest -q
 ```
 
-当前回归：`72 passed`。
+当前回归：`76 passed`。

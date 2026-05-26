@@ -18,7 +18,14 @@ venv/
 
 data/*
 !data/.gitkeep
+.capture-state/
+.debug-capture/
+.feedback/
+.hooks/
+.injection/
+.injection-log.jsonl
 .snapshots/
 .summary/
+.ui/
 
 *.log
