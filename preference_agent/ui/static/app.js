@@ -15,6 +15,7 @@ const i18n = {
       pending: "Pending",
       conflicts: "Conflicts",
       evolution: "Evolution",
+      weave: "Weave",
       injection: "Injection",
       settings: "Settings"
     },
@@ -23,8 +24,9 @@ const i18n = {
       pending: "1.3 Pending Confirmation",
       conflicts: "1.4 Conflict Review",
       evolution: "1.5 Evolution",
-      injection: "1.6 Injection Log",
-      settings: "1.7 Settings"
+      weave: "1.6 Weave Report",
+      injection: "1.7 Injection Log",
+      settings: "1.8 Settings"
     },
     summary: {
       active: "Active preferences",
@@ -37,6 +39,7 @@ const i18n = {
       profile: "No stable personal profile has been generated yet. Capture preferences first, then this section will summarize what the system understands about the user.",
       conflicts: "No A/B conflicts were detected. Pending items remain available in the Pending tab.",
       feedback: "No feedback has been recorded.",
+      weave: "No Weave report has been generated yet.",
       injection: "No injection events have been recorded yet. Start a session or call get_preference_decision to populate this timeline.",
       missingSide: "Missing side."
     },
@@ -115,6 +118,7 @@ const i18n = {
       pending: "待确认",
       conflicts: "冲突",
       evolution: "演化",
+      weave: "Weave",
       injection: "注入日志",
       settings: "设置"
     },
@@ -123,8 +127,9 @@ const i18n = {
       pending: "1.3 待确认偏好",
       conflicts: "1.4 冲突对比",
       evolution: "1.5 偏好演化",
-      injection: "1.6 注入日志",
-      settings: "1.7 设置"
+      weave: "1.6 Weave 报告",
+      injection: "1.7 注入日志",
+      settings: "1.8 设置"
     },
     summary: {
       active: "已生效偏好",
@@ -137,6 +142,7 @@ const i18n = {
       profile: "还没有生成稳定的个人画像。请先捕获偏好，之后这里会总结系统当前对用户的理解。",
       conflicts: "未检测到 A/B 冲突。待确认内容仍可在“待确认”页查看。",
       feedback: "还没有记录反馈。",
+      weave: "还没有生成 Weave 报告。",
       injection: "还没有注入事件。启动 session 或调用 get_preference_decision 后，这里会显示注入时间线。",
       missingSide: "缺少对比项。"
     },
@@ -258,6 +264,10 @@ function render() {
   }
   if (state.tab === "injection") {
     content.innerHTML = renderInjectionLog(data);
+    return;
+  }
+  if (state.tab === "weave") {
+    content.innerHTML = renderWeave(data);
     return;
   }
   if (state.tab === "settings") {
@@ -533,6 +543,30 @@ function renderEvolution(data) {
       <tbody>${rows}</tbody>
     </table>
   ` : `<p class="empty">${escapeHtml(t("empty.feedback"))}</p>`;
+}
+
+function renderWeave(data) {
+  const job = data.weave;
+  if (!job) {
+    return `<p class="empty">${escapeHtml(t("empty.weave"))}</p>`;
+  }
+  const stats = job.stats || {};
+  const instructions = job.instructions || {};
+  const commands = (job.next_commands || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  return `
+    <div class="definition">
+      <h3>${escapeHtml(job.job_id || "Weave")}</h3>
+      <p>${escapeHtml(instructions.text || "No instructions were provided.")}</p>
+      <dl class="factor-grid">
+        <div><dt>Insights</dt><dd>${escapeHtml(stats.insights_proposed || 0)}</dd></div>
+        <div><dt>Rot</dt><dd>${escapeHtml(stats.rot_suggestions || 0)}</dd></div>
+        <div><dt>Conflicts</dt><dd>${escapeHtml(stats.conflicts || 0)}</dd></div>
+        <div><dt>Ignored</dt><dd>${escapeHtml(stats.ignored_by_instruction || 0)}</dd></div>
+      </dl>
+      <p class="muted">${escapeHtml(job.report_file || "")}</p>
+      ${commands ? `<div class="definition compact"><strong>Next</strong><ul>${commands}</ul></div>` : ""}
+    </div>
+  `;
 }
 
 function renderInjectionLog(data) {

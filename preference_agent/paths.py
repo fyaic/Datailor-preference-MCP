@@ -62,6 +62,11 @@ def default_ui_dir() -> Path:
     return Path(configured) if configured else default_data_dir() / ".ui"
 
 
+def default_weave_dir() -> Path:
+    configured = os.getenv("DATAILOR_WEAVE_DIR") or os.getenv("PREFERENCE_WEAVE_DIR")
+    return Path(configured) if configured else default_data_dir() / ".weave"
+
+
 def default_hooks_dir() -> Path:
     configured = os.getenv("PREFERENCE_HOOKS_DIR")
     return Path(configured) if configured else default_data_dir() / ".hooks"
@@ -120,6 +125,7 @@ def diagnostics(store_path: str | Path | None = None) -> dict[str, Any]:
             "hooks_dir": str(default_hooks_dir()),
             "injection_dir": str(default_injection_dir()),
             "ui_dir": str(default_ui_dir()),
+            "weave_dir": str(default_weave_dir()),
         },
         "mcp": {
             "command": "datailor-mcp",

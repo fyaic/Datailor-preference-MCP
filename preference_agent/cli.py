@@ -22,6 +22,7 @@ from .paths import default_store_path
 from .preference_actions import apply_preference_feedback
 from .snapshots import list_store_snapshots, restore_store_snapshot
 from .store import MarkdownPreferenceStore
+from .weave import apply_weave_plan, get_weave_job, list_weave_jobs, run_weave
 
 
 def build_engine(args: argparse.Namespace) -> PreferenceEngine:
@@ -136,6 +137,33 @@ def main(argv: list[str] | None = None) -> int:
     cold_start.add_argument("--state", default="")
     cold_start.add_argument("--json", action="store_true", help="Print structured JSON instead of the human summary")
     cold_start.add_argument("--quiet", action="store_true", help="Print only the final status and next command")
+
+    weave = sub.add_parser("weave", parents=[common], help="Run review-first Datailor Weave consolidation")
+    weave.add_argument("--agent", default=os.getenv("PREFERENCE_CALLER_AGENT", "codex"))
+    weave.add_argument("--source", default="", help="Optional history/session file or directory")
+    weave.add_argument("--instructions", default="", help="Natural-language focus/ignore instructions")
+    weave.add_argument("--instructions-file", default="", help="Read Weave instructions from a UTF-8 text file")
+    weave.add_argument("--weave-dir", default="", help="Override the local Weave artifact directory")
+    weave.add_argument("--max-files", type=int, default=0)
+    weave.add_argument("--review", action="store_true", default=True, help="Generate drafts/report without applying changes")
+    weave.add_argument("--dry-run", action="store_true", help="Build result in memory without writing job artifacts")
+    weave.add_argument("--json", action="store_true", help="Print structured JSON instead of the human summary")
+    weave.add_argument("--quiet", action="store_true", help="Print only final status and report path")
+
+    weave_list = sub.add_parser("weave-list", parents=[common], help="List recent Datailor Weave jobs")
+    weave_list.add_argument("--weave-dir", default="")
+    weave_list.add_argument("--limit", type=int, default=20)
+
+    weave_show = sub.add_parser("weave-show", parents=[common], help="Show a Datailor Weave job")
+    weave_show.add_argument("job_id")
+    weave_show.add_argument("--weave-dir", default="")
+    weave_show.add_argument("--report", action="store_true", help="Print the Markdown report")
+    weave_show.add_argument("--json", action="store_true")
+
+    weave_apply = sub.add_parser("weave-apply", parents=[common], help="Apply accepted changes from a Datailor Weave job")
+    weave_apply.add_argument("job_id")
+    weave_apply.add_argument("--weave-dir", default="")
+    weave_apply.add_argument("--accept", action="append", default=[], help="Change id to apply; repeatable")
 
     ui = sub.add_parser("ui", parents=[common], help="Start the local preference manifesto panel")
     ui.add_argument("--host", default=os.getenv("PREFERENCE_UI_HOST", "127.0.0.1"))
@@ -286,6 +314,39 @@ def main(argv: list[str] | None = None) -> int:
         if args.json:
             return _print(result.to_dict())
         return _print_text(render_cold_start_summary(result, quiet=args.quiet))
+    if args.command == "weave":
+        result = run_weave(
+            store_path=args.store,
+            instructions=args.instructions,
+            instructions_file=args.instructions_file or None,
+            source=args.source or None,
+            agent=args.agent,
+            weave_dir=args.weave_dir or None,
+            dry_run=args.dry_run,
+            review=args.review,
+            max_files=args.max_files,
+        )
+        if args.json:
+            return _print({"ok": True, **result.to_dict()})
+        return _print_text(_render_weave_cli_summary(result.to_dict(), quiet=args.quiet))
+    if args.command == "weave-list":
+        return _print(list_weave_jobs(weave_dir=args.weave_dir or None, limit=args.limit))
+    if args.command == "weave-show":
+        result = get_weave_job(args.job_id, weave_dir=args.weave_dir or None)
+        if args.report:
+            report_file = Path(str(result.get("report_file") or ""))
+            return _print_text(report_file.read_text(encoding="utf-8") if report_file.exists() else "")
+        if args.json:
+            return _print({"ok": True, **result})
+        return _print_text(_render_weave_cli_summary(result, quiet=False))
+    if args.command == "weave-apply":
+        result = apply_weave_plan(
+            job_id=args.job_id,
+            accepted_change_ids=args.accept,
+            store_path=args.store,
+            weave_dir=args.weave_dir or None,
+        )
+        return _print(result)
     if args.command == "ui":
         from .ui.server import run_ui_server
 
@@ -319,6 +380,25 @@ def _print(data: dict[str, Any]) -> int:
 def _print_text(text: str) -> int:
     print(text)
     return 0
+
+
+def _render_weave_cli_summary(result: dict[str, Any], quiet: bool = False) -> str:
+    stats = result.get("stats") or {}
+    report_file = str(result.get("report_file") or "")
+    if quiet:
+        return f"{result.get('status', 'unknown')} {report_file}".strip()
+    lines = [
+        "Datailor Weave completed.",
+        f"- Job: {result.get('job_id', '')}",
+        f"- Report: {report_file}",
+        f"- Insights proposed: {stats.get('insights_proposed', 0)}",
+        f"- Memory rot suggestions: {stats.get('rot_suggestions', 0)}",
+        f"- Ignored by instructions: {stats.get('ignored_by_instruction', 0)}",
+    ]
+    next_commands = result.get("next_commands") or []
+    if next_commands:
+        lines.append(f"- Next: {next_commands[0]}")
+    return "\n".join(lines)
 
 
 def _build_mcp_config(args: argparse.Namespace, raw_argv: list[str]) -> dict[str, Any]:

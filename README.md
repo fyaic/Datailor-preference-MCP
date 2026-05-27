@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/datailor-github-card.png" alt="Datailor - local-first personal preference memory for agents" width="920">
+</p>
+
 # Datailor Preference MCP
 
 Datailor 是本地优先的个人偏好代言系统 POC。它从历史会话和实时 hook 中提取长期、稳定、可复用的用户偏好，写入人类可读的 `个人偏好.md`，并通过 MCP、CLI 和本地 Manifesto UI 让 agent 在回复或执行前读取这些偏好。
@@ -17,7 +21,7 @@ V0 的目标不是“记住一切”，而是验证一条可控链路：
 ```powershell
 python -m pip install --user pipx
 python -m pipx ensurepath
-pipx install git+https://github.com/fyaic/bondie-preference-MCP.git
+pipx install git+https://github.com/fyaic/Datailor-preference-MCP.git
 ```
 
 检查安装：
@@ -29,7 +33,7 @@ datailor doctor --agent codex
 开发者安装：
 
 ```powershell
-git clone https://github.com/fyaic/bondie-preference-MCP.git datailor-preference-mcp
+git clone https://github.com/fyaic/Datailor-preference-MCP.git datailor-preference-mcp
 cd datailor-preference-mcp
 python -m pip install -e .
 ```
@@ -151,6 +155,38 @@ datailor cold-start-scan --agent codex --quiet
 - `--dry-run`：只演练，不写入偏好库。
 - `--max-files`：调试或应急时限制文件数，默认不限制。
 - `--max-minutes`：限制单个 source 的运行时间，默认不限制。
+
+## Weave 离线巩固
+
+`weave` 用来做 review-first 的离线巩固：它会读取当前偏好库和可选历史源，按自然语言 instructions 提取长期模式、生成 memory rot 建议，并写出一份 Weave Report。默认不会覆盖 `个人偏好.md`。
+
+```powershell
+datailor weave --agent codex --instructions "focus on UI writing preferences; ignore one-off install commands"
+```
+
+扫描指定历史源：
+
+```powershell
+datailor weave --source "C:\path\to\history.jsonl" --instructions-file ".\weave-instructions.txt"
+```
+
+查看和应用：
+
+```powershell
+datailor weave-list
+datailor weave-show weave-20260527-173000 --report
+datailor weave-apply weave-20260527-173000 --accept chg-001
+```
+
+Weave 会生成本地 artifacts：
+
+- `report.md`：给用户审查的巩固报告。
+- `result.json`：给 CLI/MCP/UI 使用的结构化结果。
+- `draft-insights.jsonl`：preference、workflow、error_pattern、tool_quirk 等候选模式。
+- `rot-suggestions.jsonl`：重复、覆盖、冲突、过时、负反馈压低等清理建议。
+- `apply-plan.json`：可显式接受的变更计划。
+
+MCP 也提供 `start_weave_consolidation`、`get_weave_status` 和 `apply_weave_plan`，供 agent 在不依赖 `/preferences` 的情况下启动和查看巩固任务。
 
 ## 真实捕获
 

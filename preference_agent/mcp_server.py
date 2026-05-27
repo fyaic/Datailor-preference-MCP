@@ -20,6 +20,7 @@ from .paths import default_store_path
 from .preference_actions import apply_preference_feedback
 from .store import MarkdownPreferenceStore
 from .ui.server import open_preference_panel
+from .weave import apply_weave_plan, get_weave_job, latest_weave, run_weave
 
 
 _AUTO_COLD_START_DONE: set[str] = set()
@@ -296,6 +297,35 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
             )
             if auto_discovery:
                 result["auto_discovery"] = auto_discovery
+            return _tool_response(request_id, result)
+        if name == "start_weave_consolidation":
+            result = run_weave(
+                store_path=engine.store.path,
+                instructions=str(arguments.get("instructions") or ""),
+                instructions_file=arguments.get("instructions_file") or None,
+                source=arguments.get("source") or None,
+                agent=str(arguments.get("agent") or os.getenv("PREFERENCE_CALLER_AGENT") or "agent"),
+                weave_dir=arguments.get("weave_dir") or None,
+                dry_run=bool(arguments.get("dry_run", False)),
+                review=True,
+                max_files=int(arguments.get("max_files") or 0),
+            )
+            return _tool_response(request_id, {"ok": True, **result.to_dict()})
+        if name == "get_weave_status":
+            job_id = str(arguments.get("job_id") or "").strip()
+            if job_id:
+                result = get_weave_job(job_id, weave_dir=arguments.get("weave_dir") or None)
+            else:
+                result = latest_weave(weave_dir=arguments.get("weave_dir") or None)
+            return _tool_response(request_id, result if isinstance(result, dict) else {"ok": True, **result})
+        if name == "apply_weave_plan":
+            accepted = arguments.get("accepted_change_ids") if isinstance(arguments.get("accepted_change_ids"), list) else []
+            result = apply_weave_plan(
+                job_id=str(arguments.get("job_id") or ""),
+                accepted_change_ids=[str(item) for item in accepted],
+                store_path=engine.store.path,
+                weave_dir=arguments.get("weave_dir") or None,
+            )
             return _tool_response(request_id, result)
         return _error(request_id, -32601, f"Unknown tool: {name}")
     return _error(request_id, -32601, f"Unknown method: {method}")
@@ -668,6 +698,50 @@ TOOLS = [
                 "host": {"type": "string", "description": "默认 127.0.0.1，仅本机访问"},
                 "port": {"type": "integer", "description": "默认 8080；如端口被占用会自动后移"},
                 "open_browser": {"type": "boolean", "description": "是否尝试自动打开浏览器"},
+            },
+        },
+    },
+    {
+        "name": "start_weave_consolidation",
+        "description": "启动 Datailor Weave 离线巩固：按自然语言 instructions 生成 typed insights、memory rot 建议和 Weave Report。默认 review-first，不直接覆盖偏好库。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "agent": {"type": "string", "description": "调用方 agent 名称"},
+                "instructions": {"type": "string", "description": "本次关注和忽略范围，例如 focus on UI writing preferences; ignore one-off install commands"},
+                "instructions_file": {"type": "string", "description": "可选 UTF-8 instructions 文件"},
+                "source": {"type": "string", "description": "可选历史源文件或目录"},
+                "max_files": {"type": "integer", "description": "可选历史文件数上限"},
+                "dry_run": {"type": "boolean", "description": "只演练，不写 job artifacts"},
+                "weave_dir": {"type": "string", "description": "可选 Weave artifact 目录"},
+            },
+        },
+    },
+    {
+        "name": "get_weave_status",
+        "description": "查看 Datailor Weave job 状态；不传 job_id 时返回最新 job。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "Weave job id"},
+                "weave_dir": {"type": "string", "description": "可选 Weave artifact 目录"},
+            },
+        },
+    },
+    {
+        "name": "apply_weave_plan",
+        "description": "应用用户明确接受的 Weave 变更。不会默认 accept all；必须传 accepted_change_ids。",
+        "inputSchema": {
+            "type": "object",
+            "required": ["job_id", "accepted_change_ids"],
+            "properties": {
+                "job_id": {"type": "string", "description": "Weave job id"},
+                "accepted_change_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "明确接受的 change id 列表",
+                },
+                "weave_dir": {"type": "string", "description": "可选 Weave artifact 目录"},
             },
         },
     },
