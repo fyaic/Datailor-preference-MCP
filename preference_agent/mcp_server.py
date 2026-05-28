@@ -298,7 +298,7 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
             if auto_discovery:
                 result["auto_discovery"] = auto_discovery
             return _tool_response(request_id, result)
-        if name == "start_fitting_consolidation":
+        if name == "start_fitting":
             result = run_fitting(
                 store_path=engine.store.path,
                 instructions=str(arguments.get("instructions") or ""),
@@ -702,8 +702,8 @@ TOOLS = [
         },
     },
     {
-        "name": "start_fitting_consolidation",
-        "description": "启动 Datailor Fitting 离线巩固：按自然语言 instructions 生成 typed insights、memory rot 建议和 Fitting Report。默认 review-first，不直接覆盖偏好库。",
+        "name": "start_fitting",
+        "description": "启动 Datailor Fitting 离线整理：按自然语言 instructions 生成 typed insights、memory rot 建议和 Fitting Report。默认 review-first，不直接覆盖偏好库。",
         "inputSchema": {
             "type": "object",
             "properties": {

@@ -11,6 +11,7 @@ def render_fitting_report(result: FittingJobResult) -> str:
         "## Summary",
         "",
         f"- Job: `{result.job_id}`",
+        f"- Version: `{result.version}`",
         f"- Status: `{result.status}`",
         f"- Store: `{result.store_file}`",
         f"- Inputs seen: {stats.get('inputs_seen', 0)}",
@@ -22,17 +23,23 @@ def render_fitting_report(result: FittingJobResult) -> str:
         "",
         "Nothing has been stitched into the preference library unless an apply command is run.",
         "",
-        "## Instructions",
-        "",
-        result.instructions.text or "No instructions were provided.",
-        "",
-        f"- Focus: {', '.join(result.instructions.focus) if result.instructions.focus else 'none'}",
-        f"- Ignore: {', '.join(result.instructions.ignore) if result.instructions.ignore else 'none'}",
-        f"- Truncated: {str(result.instructions.truncated).lower()}",
-        "",
-        "## Inputs",
-        "",
     ]
+    if result.error:
+        lines.extend(["## Error", "", result.error, ""])
+    lines.extend(
+        [
+            "## Instructions",
+            "",
+            result.instructions.text or "No instructions were provided.",
+            "",
+            f"- Focus: {', '.join(result.instructions.focus) if result.instructions.focus else 'none'}",
+            f"- Ignore: {', '.join(result.instructions.ignore) if result.instructions.ignore else 'none'}",
+            f"- Truncated: {str(result.instructions.truncated).lower()}",
+            "",
+            "## Inputs",
+            "",
+        ]
+    )
     lines.extend(_bullet_list(result.inputs, empty="No external source was scanned; the current preference store was used."))
     lines.extend(["", "## New Patterns", ""])
     lines.extend(_insight_section([item for item in result.insights if item.kind != "preference"]))

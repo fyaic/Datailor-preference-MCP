@@ -156,9 +156,9 @@ datailor cold-start-scan --agent codex --quiet
 - `--max-files`：调试或应急时限制文件数，默认不限制。
 - `--max-minutes`：限制单个 source 的运行时间，默认不限制。
 
-## Fitting 离线巩固
+## Fitting 离线整理
 
-`fitting` 用来做 review-first 的离线巩固：它会读取当前偏好库和可选历史源，按自然语言 instructions 提取长期模式、生成 memory rot 建议，并写出一份 Fitting Report。默认不会覆盖 `个人偏好.md`。
+`fitting` 用来做 review-first 的离线整理：它会读取当前偏好库和可选历史源，按自然语言 instructions 提取长期模式、生成 memory rot 建议，并写出一份 Fitting Report。默认不会覆盖 `个人偏好.md`。
 
 ```powershell
 datailor fitting --agent codex --instructions "focus on UI writing preferences; ignore one-off install commands"
@@ -180,13 +180,13 @@ datailor fitting-apply fitting-20260527-173000 --accept chg-001
 
 Fitting 会生成本地 artifacts：
 
-- `report.md`：给用户审查的巩固报告。
+- `report.md`：给用户审查的 Fitting Report。
 - `result.json`：给 CLI/MCP/UI 使用的结构化结果。
 - `draft-insights.jsonl`：preference、workflow、error_pattern、tool_quirk 等候选模式。
 - `rot-suggestions.jsonl`：重复、覆盖、冲突、过时、负反馈压低等清理建议。
 - `apply-plan.json`：可显式接受的变更计划。
 
-MCP 也提供 `start_fitting_consolidation`、`get_fitting_status` 和 `apply_fitting_plan`，供 agent 在不依赖 `/preferences` 的情况下启动和查看巩固任务。
+MCP 也提供 `start_fitting`、`get_fitting_status` 和 `apply_fitting_plan`，供 agent 在不依赖 `/preferences` 的情况下启动和查看 Fitting 任务。
 
 ## 真实捕获
 

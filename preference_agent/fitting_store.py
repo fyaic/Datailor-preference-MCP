@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .paths import default_fitting_dir
-from .fitting_models import ApplyPlan, InsightRecord, RotSuggestion, FittingJobResult
+from .fitting_models import FITTING_SCHEMA_VERSION, ApplyPlan, InsightRecord, RotSuggestion, FittingJobResult
 
 
 @dataclass(frozen=True)
@@ -47,6 +47,7 @@ class FittingJobStore:
     def write_status(self, paths: FittingJobPaths, status: str, extra: dict[str, Any] | None = None) -> None:
         self.ensure_job_dir(paths)
         payload = {
+            "version": FITTING_SCHEMA_VERSION,
             "job_id": paths.job_id,
             "status": status,
             "updated_at": _now_compact(),

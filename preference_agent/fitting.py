@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
+from .agent_discovery import auto_discover_sources
 from .backends import semantic_similarity
 from .feedback import feedback_report
 from .live_confidence import live_confidence
@@ -41,46 +42,71 @@ def run_fitting(
     instruction = FittingInstruction.from_text(instruction_text, source="file" if instructions_file else "cli")
     store = MarkdownPreferenceStore(store_path)
     store.ensure()
-    records = store.load()
     job_store = FittingJobStore(fitting_dir)
     paths = job_store.new_job_paths()
-    job_store.write_status(paths, "running", {"agent": agent, "review": review, "dry_run": dry_run})
-
-    inputs = _collect_inputs(records=records, source=source, max_files=max_files)
-    filtered_inputs, ignored_inputs = _apply_instruction_filter(inputs, instruction)
-    insights = extract_insights(filtered_inputs)
-    rot_suggestions = analyze_memory_rot(records, feedback_report())
-    apply_plan = build_apply_plan(paths.job_id, insights, rot_suggestions)
-    stats = _stats(inputs, ignored_inputs, insights, rot_suggestions)
-    result = FittingJobResult(
-        job_id=paths.job_id,
-        status="completed",
-        store_file=str(store.path),
-        job_dir=str(paths.job_dir),
-        report_file=str(paths.report_file),
-        result_file=str(paths.result_file),
-        instructions=instruction,
-        insights=insights,
-        rot_suggestions=rot_suggestions,
-        apply_plan=apply_plan,
-        stats=stats,
-        inputs=_input_labels(inputs),
-        ignored_inputs=ignored_inputs,
-        next_commands=[
-            f"datailor fitting-show {paths.job_id}",
-            f"datailor fitting-apply {paths.job_id} --accept <change-id>",
-        ],
-    )
-    report = render_fitting_report(result)
     if not dry_run:
-        job_store.ensure_job_dir(paths)
-        paths.report_file.write_text(report, encoding="utf-8")
-        job_store.write_insights(paths, insights)
-        job_store.write_rot_suggestions(paths, rot_suggestions)
-        job_store.write_apply_plan(paths, apply_plan)
-        job_store.write_result(result)
-        job_store.write_status(paths, "completed", {"report_file": str(paths.report_file), "result_file": str(paths.result_file)})
-    return result
+        job_store.write_status(paths, "running", {"agent": agent, "review": review, "dry_run": dry_run})
+
+    inputs: list[FittingInput] = []
+    ignored_inputs: list[dict[str, str]] = []
+    try:
+        records = store.load()
+        inputs, source_errors, auto_source_count = _collect_inputs(
+            records=records,
+            source=source,
+            max_files=max_files,
+            agent=agent,
+        )
+        filtered_inputs, instruction_ignored = _apply_instruction_filter(inputs, instruction)
+        ignored_inputs = [*source_errors, *instruction_ignored]
+        insights = extract_insights(filtered_inputs)
+        rot_suggestions = analyze_memory_rot(records, feedback_report())
+        apply_plan = build_apply_plan(paths.job_id, insights, rot_suggestions)
+        stats = _stats(inputs, ignored_inputs, insights, rot_suggestions, auto_source_count)
+        result = FittingJobResult(
+            job_id=paths.job_id,
+            status="completed",
+            store_file=str(store.path),
+            job_dir=str(paths.job_dir),
+            report_file=str(paths.report_file),
+            result_file=str(paths.result_file),
+            instructions=instruction,
+            insights=insights,
+            rot_suggestions=rot_suggestions,
+            apply_plan=apply_plan,
+            stats=stats,
+            inputs=_input_labels(inputs),
+            ignored_inputs=ignored_inputs,
+            next_commands=[
+                f"datailor fitting-show {paths.job_id}",
+                f"datailor fitting-apply {paths.job_id} --accept <change-id>",
+            ],
+        )
+        _write_job_artifacts(job_store, paths, result, dry_run=dry_run)
+        return result
+    except Exception as exc:
+        result = FittingJobResult(
+            job_id=paths.job_id,
+            status="failed",
+            store_file=str(store.path),
+            job_dir=str(paths.job_dir),
+            report_file=str(paths.report_file),
+            result_file=str(paths.result_file),
+            instructions=instruction,
+            stats={"inputs_seen": len(inputs), "source_errors": len(ignored_inputs)},
+            inputs=_input_labels(inputs),
+            ignored_inputs=ignored_inputs,
+            error=str(exc),
+            next_commands=["Review the Fitting report and rerun `datailor fitting` after fixing the error."],
+        )
+        _write_job_artifacts(job_store, paths, result, dry_run=dry_run)
+        if not dry_run:
+            job_store.write_status(
+                paths,
+                "failed",
+                {"error": str(exc), "report_file": str(paths.report_file), "result_file": str(paths.result_file)},
+            )
+        return result
 
 
 def extract_insights(inputs: list[FittingInput]) -> list[InsightRecord]:
@@ -296,22 +322,64 @@ def _instruction_text(instructions: str, instructions_file: str | Path | None) -
     return "\n".join(part for part in parts if part)
 
 
-def _collect_inputs(records: list[PreferenceRecord], source: str | Path | None, max_files: int) -> list[FittingInput]:
+def _write_job_artifacts(
+    job_store: FittingJobStore,
+    paths: Any,
+    result: FittingJobResult,
+    dry_run: bool,
+) -> None:
+    if dry_run:
+        return
+    report = render_fitting_report(result)
+    job_store.ensure_job_dir(paths)
+    paths.report_file.write_text(report, encoding="utf-8")
+    job_store.write_insights(paths, result.insights)
+    job_store.write_rot_suggestions(paths, result.rot_suggestions)
+    if result.apply_plan:
+        job_store.write_apply_plan(paths, result.apply_plan)
+    job_store.write_result(result)
+    if result.status == "completed":
+        job_store.write_status(
+            paths,
+            "completed",
+            {"report_file": str(paths.report_file), "result_file": str(paths.result_file)},
+        )
+
+
+def _collect_inputs(
+    records: list[PreferenceRecord],
+    source: str | Path | None,
+    max_files: int,
+    agent: str,
+) -> tuple[list[FittingInput], list[dict[str, str]], int]:
     inputs: list[FittingInput] = []
-    if source:
-        sessions = load_sessions(source)
-        files_seen: set[str] = set()
+    skipped: list[dict[str, str]] = []
+    auto_sources = 0
+    source_paths = [str(source)] if source else [item.path for item in auto_discover_sources(agent_hint=agent)]
+    auto_sources = 0 if source else len(source_paths)
+    files_seen: set[str] = set()
+    stop = False
+    for source_path in source_paths:
+        try:
+            sessions = load_sessions(source_path)
+        except Exception as exc:
+            skipped.append({"source": str(source_path), "reason": f"source_read_error: {exc}"})
+            continue
         for session in sessions:
             file_key = str(session.source).split("#", 1)[0]
-            files_seen.add(file_key)
-            if max_files and len(files_seen) > max_files:
-                break
+            if file_key not in files_seen:
+                if max_files and len(files_seen) >= max_files:
+                    stop = True
+                    break
+                files_seen.add(file_key)
             for message in session.messages:
                 if message.role == "user":
                     inputs.append(FittingInput(source=session.source, text=message.content, role=message.role))
+        if stop:
+            break
     for record in records:
         inputs.append(FittingInput(source=f"store:{record.id}", text=_record_text(record), role="preference"))
-    return inputs
+    return inputs, skipped, auto_sources
 
 
 def _apply_instruction_filter(
@@ -353,17 +421,32 @@ def _looks_like_durable_insight(text: str) -> bool:
         or _looks_like_workflow(text)
         or _looks_like_error_pattern(text)
         or _looks_like_tool_quirk(text)
+        or _looks_like_recovery_strategy(text)
+        or _looks_like_handoff_pattern(text)
+        or _looks_like_app_usage(text)
+        or _looks_like_personal_habit(text)
+        or _looks_like_project_convention(text)
         or (has_stable_signal(text) and has_guidance_terms(text))
     )
 
 
 def _classify_kind(text: str) -> str:
+    if _looks_like_recovery_strategy(text):
+        return "recovery_strategy"
     if _looks_like_error_pattern(text):
         return "error_pattern"
+    if _looks_like_handoff_pattern(text):
+        return "handoff_pattern"
+    if _looks_like_project_convention(text):
+        return "project_convention"
+    if _looks_like_app_usage(text):
+        return "app_usage"
     if _looks_like_tool_quirk(text):
         return "tool_quirk"
     if re.search(r"(流程|步骤|工作流|长任务|Harness|PRD|自检|验收)", text, re.I):
         return "workflow"
+    if _looks_like_personal_habit(text):
+        return "personal_habit"
     if should_recall_user_text(text):
         return "preference"
     if _looks_like_workflow(text):
@@ -379,11 +462,43 @@ def _looks_like_workflow(text: str) -> bool:
 
 
 def _looks_like_error_pattern(text: str) -> bool:
-    return bool(re.search(r"(经常|反复|总是).{0,24}(错|失败|漏|忘|没)|error pattern|常犯|恢复策略", text, re.I))
+    return bool(re.search(r"(经常|反复|总是).{0,24}(错|失败|漏|忘|没)|error pattern|常犯", text, re.I))
 
 
 def _looks_like_tool_quirk(text: str) -> bool:
     return bool(re.search(r"(PowerShell|MCP|CLI|pipx|终端|工具|Obsidian|Linear|Kimi|Codex|Windows|UI|quirk)", text, re.I))
+
+
+def _looks_like_recovery_strategy(text: str) -> bool:
+    return bool(
+        re.search(r"(失败|报错|异常|无法|不能|出错|blocked|fail|error).{0,36}(恢复|重试|回滚|修复|改用|降级|fallback|retry|rerun)", text, re.I)
+        or re.search(r"(失败|报错|异常|无法|不能|出错).{0,36}(说明|明确|记录|报告).{0,18}(原因|阻塞|限制)", text, re.I)
+        or re.search(r"(恢复策略|失败后|报错后|出错后|无法完成时|不能完成时)", text, re.I)
+    )
+
+
+def _looks_like_handoff_pattern(text: str) -> bool:
+    return bool(
+        re.search(r"(完成|阶段性|收尾|交付|汇报|总结|交接|handoff).{0,40}(Linear|issue|更新|询问|说明|报告|评论)", text, re.I)
+        or re.search(r"(是否需要更新\s*Linear\s*issue|更新\s*Linear\s*issue)", text, re.I)
+    )
+
+
+def _looks_like_app_usage(text: str) -> bool:
+    return bool(
+        re.search(r"(常用|使用|用|打开|管理|记录|写入).{0,30}(Obsidian|Linear|Slack|飞书|Notion|Excel|GitHub|Kimi|Codex|Claude)", text, re.I)
+    )
+
+
+def _looks_like_personal_habit(text: str) -> bool:
+    return bool(re.search(r"(我习惯|用户习惯|我一般|我通常|我喜欢|偏好用|强迫症|习惯上)", text, re.I))
+
+
+def _looks_like_project_convention(text: str) -> bool:
+    return bool(
+        re.search(r"(项目|仓库|repo|README|AGENTS|文档|产品名|命名|目录|分支).{0,40}(统一|必须|不准|应该|约定|规范|Datailor|Fitting)", text, re.I)
+        or re.search(r"(产品名叫\s*Datailor|统一使用\s*Fitting|不准有旧称)", text, re.I)
+    )
 
 
 def _insight_from_text(kind: str, text: str, item: FittingInput) -> InsightRecord:
@@ -392,12 +507,22 @@ def _insight_from_text(kind: str, text: str, item: FittingInput) -> InsightRecor
         "workflow": "工作流",
         "error_pattern": "错误模式",
         "tool_quirk": "工具特性",
+        "recovery_strategy": "恢复策略",
+        "handoff_pattern": "交接模式",
+        "app_usage": "常用应用",
+        "personal_habit": "个人习惯",
+        "project_convention": "项目约定",
     }.get(kind, "模式")
     applies_to = {
         "preference": "agent 回复、执行任务或做确认决策",
         "workflow": "同类任务执行流程",
         "error_pattern": "错误恢复与交付前检查",
         "tool_quirk": "工具调用、终端、MCP 或 UI 操作",
+        "recovery_strategy": "失败恢复、重试或降级处理",
+        "handoff_pattern": "阶段性交付、收尾和任务交接",
+        "app_usage": "使用常用应用或外部系统时",
+        "personal_habit": "个人协作和表达习惯",
+        "project_convention": "当前项目、仓库或产品文档",
     }.get(kind, "长期行为模式")
     return InsightRecord(
         id=f"insight-{uuid5(NAMESPACE_URL, f'{kind}:{item.source}:{text}').hex[:8]}",
@@ -436,14 +561,19 @@ def _stats(
     ignored: list[dict[str, str]],
     insights: list[InsightRecord],
     suggestions: list[RotSuggestion],
+    auto_source_count: int = 0,
 ) -> dict[str, int]:
     return {
         "inputs_seen": len(inputs),
+        "auto_discovered_sources": auto_source_count,
+        "sources_skipped": sum(1 for item in ignored if str(item.get("reason", "")).startswith("source_read_error")),
         "insights_proposed": len(insights),
         "preferences_proposed": sum(1 for item in insights if item.kind == "preference"),
         "rot_suggestions": len(suggestions),
         "conflicts": sum(1 for item in suggestions if item.type == "conflict"),
-        "ignored_by_instruction": len(ignored),
+        "ignored_by_instruction": sum(
+            1 for item in ignored if item.get("reason") in {"ignored_by_instruction", "outside_focus"}
+        ),
     }
 
 
@@ -477,6 +607,16 @@ def _infer_triggers(kind: str, text: str) -> list[str]:
         return ["类似错误再次出现", "交付前自检"]
     if kind == "tool_quirk":
         return ["使用相关工具时"]
+    if kind == "recovery_strategy":
+        return ["失败或报错时", "恢复任务时"]
+    if kind == "handoff_pattern":
+        return ["阶段性成果完成后", "交付或收尾时"]
+    if kind == "app_usage":
+        return ["使用相关应用时"]
+    if kind == "personal_habit":
+        return ["协作方式相关任务"]
+    if kind == "project_convention":
+        return ["当前项目或仓库内"]
     triggers = []
     for marker in ("回复", "测试", "文档", "回读", "Linear", "中文", "UI"):
         if marker.casefold() in text.casefold():

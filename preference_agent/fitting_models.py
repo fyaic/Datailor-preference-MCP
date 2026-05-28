@@ -8,6 +8,8 @@ from uuid import uuid4
 from .models import Evidence, PreferenceRecord, now_iso, unique_strings
 
 
+FITTING_SCHEMA_VERSION = "0.1.0"
+
 INSIGHT_KINDS = {
     "preference",
     "workflow",
@@ -17,6 +19,7 @@ INSIGHT_KINDS = {
     "handoff_pattern",
     "app_usage",
     "personal_habit",
+    "project_convention",
 }
 ROT_TYPES = {
     "duplicate",
@@ -162,6 +165,7 @@ class RotSuggestion:
     evidence: list[str] = field(default_factory=list)
     status: str = "draft"
     id: str = field(default_factory=lambda: f"rot-{uuid4().hex[:8]}")
+    version: str = FITTING_SCHEMA_VERSION
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "RotSuggestion":
@@ -182,6 +186,7 @@ class RotSuggestion:
             proposed_record=proposed,
             evidence=_string_list(data.get("evidence")),
             status=str(data.get("status") or "draft"),
+            version=str(data.get("version") or FITTING_SCHEMA_VERSION),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -218,6 +223,7 @@ class ApplyChange:
 class ApplyPlan:
     job_id: str
     changes: list[ApplyChange] = field(default_factory=list)
+    version: str = FITTING_SCHEMA_VERSION
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ApplyPlan":
@@ -228,10 +234,15 @@ class ApplyPlan:
                 for item in data.get("changes", [])
                 if isinstance(item, dict)
             ],
+            version=str(data.get("version") or FITTING_SCHEMA_VERSION),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {"job_id": self.job_id, "changes": [item.to_dict() for item in self.changes]}
+        return {
+            "version": self.version,
+            "job_id": self.job_id,
+            "changes": [item.to_dict() for item in self.changes],
+        }
 
 
 @dataclass
@@ -252,6 +263,7 @@ class FittingJobResult:
     next_commands: list[str] = field(default_factory=list)
     error: str = ""
     created_at: str = field(default_factory=now_iso)
+    version: str = FITTING_SCHEMA_VERSION
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "FittingJobResult":
@@ -284,10 +296,12 @@ class FittingJobResult:
             next_commands=_string_list(data.get("next_commands")),
             error=str(data.get("error") or ""),
             created_at=str(data.get("created_at") or now_iso()),
+            version=str(data.get("version") or FITTING_SCHEMA_VERSION),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "version": self.version,
             "job_id": self.job_id,
             "status": self.status,
             "store_file": self.store_file,

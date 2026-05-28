@@ -273,6 +273,19 @@ input {
   word-break: break-word;
 }
 
+.report-block {
+  max-height: 560px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  background: var(--soft);
+  padding: 12px 14px;
+  font-family: "Latin Modern Mono", "Computer Modern Typewriter", "Courier New", monospace;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 .matched-list {
   display: flex;
   flex-wrap: wrap;

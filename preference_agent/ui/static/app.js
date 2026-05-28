@@ -553,9 +553,14 @@ function renderFitting(data) {
   const stats = job.stats || {};
   const instructions = job.instructions || {};
   const commands = (job.next_commands || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  const reportMarkdown = String(job.report_markdown || "").trim();
+  const reportBlock = reportMarkdown
+    ? `<pre class="report-block">${escapeHtml(reportMarkdown)}</pre>`
+    : `<p class="empty">${escapeHtml(job.report_error || "The report file is not available from the UI.")}</p>`;
   return `
     <div class="definition">
       <h3>${escapeHtml(job.job_id || "Fitting")}</h3>
+      <p class="muted">${escapeHtml(job.status || "unknown")} · ${escapeHtml(job.version || "")}</p>
       <p>${escapeHtml(instructions.text || "No instructions were provided.")}</p>
       <dl class="factor-grid">
         <div><dt>Insights</dt><dd>${escapeHtml(stats.insights_proposed || 0)}</dd></div>
@@ -564,6 +569,8 @@ function renderFitting(data) {
         <div><dt>Ignored</dt><dd>${escapeHtml(stats.ignored_by_instruction || 0)}</dd></div>
       </dl>
       <p class="muted">${escapeHtml(job.report_file || "")}</p>
+      <h3>Report</h3>
+      ${reportBlock}
       ${commands ? `<div class="definition compact"><strong>Next</strong><ul>${commands}</ul></div>` : ""}
     </div>
   `;

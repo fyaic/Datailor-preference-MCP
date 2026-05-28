@@ -140,7 +140,7 @@ def build_manifesto(
             "summary": injection_log_summary(injection_events),
             "items": injection_events,
         },
-        "fitting": latest_fitting().get("job"),
+        "fitting": _latest_fitting_view(),
     }
 
 
@@ -288,7 +288,7 @@ def _make_handler(config: UiConfig) -> type[BaseHTTPRequestHandler]:
                 self._json(HTTPStatus.OK, payload)
                 return
             if path == "/api/fitting/latest":
-                self._json(HTTPStatus.OK, latest_fitting())
+                self._json(HTTPStatus.OK, {"ok": True, "job": _latest_fitting_view()})
                 return
             self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
 
@@ -422,6 +422,23 @@ def _record_view(record: PreferenceRecord, feedback_by_preference: dict[str, dic
         "feedback": feedback,
         "attention": attention,
     }
+
+
+def _latest_fitting_view() -> dict[str, Any] | None:
+    job = latest_fitting().get("job")
+    if not isinstance(job, dict):
+        return None
+    view = dict(job)
+    report_file = Path(str(view.get("report_file") or ""))
+    view["report_markdown"] = ""
+    view["report_available"] = False
+    if report_file.exists() and report_file.is_file():
+        try:
+            view["report_markdown"] = report_file.read_text(encoding="utf-8")
+            view["report_available"] = True
+        except OSError as exc:
+            view["report_error"] = str(exc)
+    return view
 
 
 def _build_conflict_groups(

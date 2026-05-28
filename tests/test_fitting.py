@@ -5,6 +5,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from preference_agent.cli import main as cli_main
@@ -13,7 +14,7 @@ from preference_agent.mcp_server import handle_request
 from preference_agent.models import PreferenceRecord
 from preference_agent.store import MarkdownPreferenceStore
 from preference_agent.ui.server import build_manifesto
-from preference_agent.fitting import analyze_memory_rot, apply_fitting_plan, run_fitting
+from preference_agent.fitting import FittingInput, analyze_memory_rot, apply_fitting_plan, extract_insights, run_fitting
 from preference_agent.fitting_models import FittingInstruction
 
 
@@ -70,6 +71,9 @@ class FittingTests(unittest.TestCase):
             self.assertEqual(store_path.read_text(encoding="utf-8"), before)
             self.assertTrue(Path(result.report_file).exists())
             self.assertTrue(Path(result.result_file).exists())
+            self.assertEqual(_read_json(Path(result.result_file))["version"], "0.1.0")
+            self.assertEqual(_read_json(fitting_dir / "jobs" / result.job_id / "apply-plan.json")["version"], "0.1.0")
+            self.assertEqual(_read_json(fitting_dir / "jobs" / result.job_id / "status.json")["version"], "0.1.0")
             kinds = {item.kind for item in result.insights}
             self.assertIn("preference", kinds)
             self.assertIn("workflow", kinds)
@@ -80,6 +84,69 @@ class FittingTests(unittest.TestCase):
             self.assertIn("## Instructions", report)
             self.assertIn("## Memory Rot Suggestions", report)
             self.assertIn("## Ignored By Instructions", report)
+
+    def test_run_fitting_auto_discovers_sources_when_source_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source_path = root / "codex-history.md"
+            source_path.write_text("用户: 以后修改代码后，默认先跑相关测试再交付。", encoding="utf-8")
+
+            with patch(
+                "preference_agent.fitting.auto_discover_sources",
+                return_value=[SimpleNamespace(path=str(source_path))],
+            ):
+                result = run_fitting(
+                    store_path=root / "prefs.md",
+                    agent="codex",
+                    fitting_dir=root / ".fitting",
+                    max_files=1,
+                )
+
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(result.stats["auto_discovered_sources"], 1)
+            self.assertTrue(any(str(source_path) in item for item in result.inputs))
+            self.assertTrue(result.insights)
+
+    def test_extract_insights_covers_all_fitting_insight_kinds(self) -> None:
+        inputs = [
+            FittingInput(
+                source="fixture",
+                text="\n".join(
+                    [
+                        "如果测试失败，先重新运行相关命令，仍失败就说明阻塞原因。",
+                        "阶段性成果完成后，询问是否需要更新 Linear issue。",
+                        "用户常用 Obsidian 管理长期文档。",
+                        "我习惯先给结论再给验证结果。",
+                        "项目文档必须统一使用 Datailor 和 Fitting 命名。",
+                    ]
+                ),
+            )
+        ]
+
+        kinds = {item.kind for item in extract_insights(inputs)}
+
+        self.assertIn("recovery_strategy", kinds)
+        self.assertIn("handoff_pattern", kinds)
+        self.assertIn("app_usage", kinds)
+        self.assertIn("personal_habit", kinds)
+        self.assertIn("project_convention", kinds)
+
+    def test_run_fitting_writes_failed_job_when_pipeline_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source_path = root / "history.md"
+            fitting_dir = root / ".fitting"
+            source_path.write_text("用户: 以后修改代码后，默认先跑相关测试再交付。", encoding="utf-8")
+
+            with patch("preference_agent.fitting.extract_insights", side_effect=RuntimeError("boom")):
+                result = run_fitting(store_path=root / "prefs.md", source=source_path, fitting_dir=fitting_dir)
+
+            job_dir = fitting_dir / "jobs" / result.job_id
+            self.assertEqual(result.status, "failed")
+            self.assertIn("boom", result.error)
+            self.assertEqual(_read_json(job_dir / "status.json")["status"], "failed")
+            self.assertEqual(_read_json(job_dir / "result.json")["status"], "failed")
+            self.assertIn("## Error", (job_dir / "report.md").read_text(encoding="utf-8"))
 
     def test_memory_rot_flags_duplicate_conflict_stale_and_negative_feedback(self) -> None:
         duplicate_a = PreferenceRecord(
@@ -201,13 +268,20 @@ class FittingTests(unittest.TestCase):
             source.write_text("用户: 以后修改代码后，默认先跑相关测试再交付。", encoding="utf-8")
             engine = build_mcp_engine(store)
             with patch.dict("os.environ", {"DATAILOR_FITTING_DIR": str(fitting_dir)}, clear=False):
+                listed = handle_request(
+                    {"jsonrpc": "2.0", "id": 0, "method": "tools/list"},
+                    engine,
+                )
+                tool_names = {item["name"] for item in listed["result"]["tools"]}
+                self.assertIn("start_fitting", tool_names)
+                self.assertEqual(sum(1 for name in tool_names if name.startswith("start_fitting")), 1)
                 started = handle_request(
                     {
                         "jsonrpc": "2.0",
                         "id": 1,
                         "method": "tools/call",
                         "params": {
-                            "name": "start_fitting_consolidation",
+                            "name": "start_fitting",
                             "arguments": {
                                 "source": str(source),
                                 "instructions": "ignore one-off install commands",
@@ -226,6 +300,7 @@ class FittingTests(unittest.TestCase):
                 self.assertIn("fitting", latest)
                 self.assertIsNotNone(latest["fitting"])
                 self.assertEqual(latest["fitting"]["job_id"], payload["job_id"])
+                self.assertIn("# Datailor Fitting Report", latest["fitting"]["report_markdown"])
 
 
 def _run_cli(argv: list[str]) -> dict:
@@ -237,6 +312,12 @@ def _run_cli(argv: list[str]) -> dict:
     if code != 0:
         raise AssertionError(f"CLI exited with {code}: {buffer.getvalue()}")
     return json.loads(buffer.getvalue())
+
+
+def _read_json(path: Path) -> dict:
+    import json
+
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

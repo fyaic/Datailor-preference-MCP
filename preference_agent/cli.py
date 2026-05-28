@@ -138,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     cold_start.add_argument("--json", action="store_true", help="Print structured JSON instead of the human summary")
     cold_start.add_argument("--quiet", action="store_true", help="Print only the final status and next command")
 
-    fitting = sub.add_parser("fitting", parents=[common], help="Run review-first Datailor Fitting consolidation")
+    fitting = sub.add_parser("fitting", parents=[common], help="Run review-first Datailor Fitting")
     fitting.add_argument("--agent", default=os.getenv("PREFERENCE_CALLER_AGENT", "codex"))
     fitting.add_argument("--source", default="", help="Optional history/session file or directory")
     fitting.add_argument("--instructions", default="", help="Natural-language focus/ignore instructions")
