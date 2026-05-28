@@ -16,15 +16,15 @@ RECORD_RE = re.compile(r"```json preference-record\s+(.*?)\s+```", re.S)
 BULLET_RE = re.compile(r"^\s*-\s+(.+?)\s*$")
 
 
-EMPTY_STORE = """# 个人偏好
+EMPTY_STORE = """# Personal Preferences
 
-## 已确认偏好
+## Active Preferences
 
-暂无已确认偏好。
+No active preferences yet.
 
-## 待观察偏好
+## Observed Preferences
 
-暂无待观察偏好。
+No observed preferences yet.
 """
 
 
@@ -69,20 +69,20 @@ class MarkdownPreferenceStore:
         active = _unique(active)
         observed = _unique(observed)
         lines: list[str] = [
-            "# 个人偏好",
+            "# Personal Preferences",
             "",
-            "## 已确认偏好",
+            "## Active Preferences",
             "",
         ]
         if active:
             lines.extend(f"- {item}" for item in active)
         else:
-            lines.append("暂无已确认偏好。")
-        lines.extend(["", "## 待观察偏好", ""])
+            lines.append("No active preferences yet.")
+        lines.extend(["", "## Observed Preferences", ""])
         if observed:
             lines.extend(f"- {item}" for item in observed)
         else:
-            lines.append("暂无待观察偏好。")
+            lines.append("No observed preferences yet.")
         lines.append("")
         return "\n".join(lines)
 
@@ -92,13 +92,14 @@ class MarkdownPreferenceStore:
         for line in text.splitlines():
             stripped = line.strip()
             if stripped.startswith("## "):
-                current_status = "needs_review" if "待观察" in stripped else "active"
+                lowered = stripped.casefold()
+                current_status = "needs_review" if "observed" in lowered or "pending" in lowered else "active"
                 continue
             match = BULLET_RE.match(line)
             if not match:
                 continue
             statement = match.group(1).strip()
-            if not statement or statement.startswith("暂无"):
+            if not statement or statement.casefold().startswith("no "):
                 continue
             records.append(_record_from_statement(statement, current_status))
         return records
@@ -107,10 +108,10 @@ class MarkdownPreferenceStore:
 def _statement(record: PreferenceRecord) -> str:
     preference = _ensure_period(_clean_text(record.preference))
     applies_to = _clean_text(record.applies_to)
-    if preference.startswith("当"):
+    if preference.casefold().startswith("when "):
         return preference
-    if applies_to.startswith("当"):
-        return f"{applies_to}，{preference}"
+    if applies_to.casefold().startswith("when "):
+        return f"{applies_to}, {preference}"
     return preference
 
 
@@ -131,11 +132,11 @@ def _clean_statement(text: str) -> str:
 
 
 def _clean_text(text: str) -> str:
-    return redact_sensitive(" ".join(str(text).split()).strip().rstrip("。"))
+    return redact_sensitive(" ".join(str(text).split()).strip().rstrip("."))
 
 
 def _ensure_period(text: str) -> str:
-    return text if text.endswith(("。", "！", "？", ".", "!", "?")) else text + "。"
+    return text if text.endswith((".", "!", "?")) else text + "."
 
 
 def _unique(items: list[str]) -> list[str]:

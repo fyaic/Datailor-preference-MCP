@@ -17,9 +17,9 @@ class AgentDiscoveryTests(unittest.TestCase):
             claude = home / ".claude" / "history.jsonl"
             codex = home / ".codex" / "history.jsonl"
             kimi = home / ".kimi" / "user-history" / "one.jsonl"
-            _write_jsonl(claude, "以后默认先给结论。")
-            _write_jsonl(codex, "代码改完默认跑测试。")
-            _write_jsonl(kimi, "回复我时少废话。")
+            _write_jsonl(claude, "From now on, give the conclusion first.")
+            _write_jsonl(codex, "Run tests by default after code changes.")
+            _write_jsonl(kimi, "Keep replies concise.")
             os.utime(claude, (100, 100))
             os.utime(codex, (300, 300))
             os.utime(kimi, (200, 200))
@@ -39,8 +39,8 @@ class AgentDiscoveryTests(unittest.TestCase):
             home = Path(temp)
             claude = home / ".claude" / "history.jsonl"
             codex = home / ".codex" / "history.jsonl"
-            _write_jsonl(claude, "以后默认先给结论。")
-            _write_jsonl(codex, "代码改完默认跑测试。")
+            _write_jsonl(claude, "From now on, give the conclusion first.")
+            _write_jsonl(codex, "Run tests by default after code changes.")
             os.utime(claude, (100, 100))
             os.utime(codex, (300, 300))
 
@@ -53,7 +53,7 @@ class AgentDiscoveryTests(unittest.TestCase):
             root = Path(temp)
             home = root / "home"
             source = home / ".kimi" / "user-history" / "one.jsonl"
-            _write_jsonl(source, "以后默认先给我大纲。")
+            _write_jsonl(source, "From now on, give me an outline first.")
             config = CaptureConfig(
                 project_root=root,
                 candidate_dir=root / "debug",

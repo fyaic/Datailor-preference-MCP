@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .engine import PreferenceEngine
+from .fitting_background import maybe_run_fitting_after_capture
 from .injection_log import log_injection_event
 from .injection import prewarm_session, sync_injection_artifacts
 from .models import Evidence, PreferenceRecord, Session, SessionMessage, now_iso
@@ -16,23 +17,20 @@ from .quality import should_recall_user_text
 
 
 TURN_SIGNAL_MARKERS = (
-    "以后",
-    "默认",
-    "记住",
-    "记下",
-    "下次",
-    "以后默认",
-    "从现在开始",
-    "不对",
-    "错了",
-    "不是这个意思",
-    "不要",
-    "别",
-    "我希望",
-    "我偏好",
-    "你应该",
+    "from now on",
+    "default",
+    "remember",
+    "next time",
+    "not that",
+    "wrong",
+    "not what I meant",
+    "do not",
+    "don't",
+    "I want",
+    "I prefer",
+    "you should",
 )
-ASSISTANT_SIGNAL_MARKERS = ("确认", "要不要", "是否", "需不需要", "可以吗")
+ASSISTANT_SIGNAL_MARKERS = ("confirm", "should I", "do you want", "do we need", "is it ok")
 DEFAULT_MAX_TURNS = 5
 DEFAULT_MIN_SESSION_MESSAGES = 3
 
@@ -81,7 +79,7 @@ class PreferenceHookManager:
         output_dir: str | Path | None = None,
     ) -> dict[str, Any]:
         context = {**(context or {}), "session_id": session_id, "hook": "session_start"}
-        task = task or "新 Session 初始化"
+        task = task or "new session initialization"
         decision = self.engine.decide(task=task, context=context, agent=agent, log_event=False)
         prewarm = prewarm_session(
             store_path=self.engine.store.path,
@@ -192,6 +190,14 @@ class PreferenceHookManager:
         }
         if len(turns) >= self.max_turns:
             response["flush"] = self.flush_turn_buffer(agent=agent, session_id=session_id, dry_run=dry_run)
+            if not dry_run:
+                response["fitting"] = maybe_run_fitting_after_capture(
+                    store_path=self.engine.store.path,
+                    changed_records=_capture_changed_count(response["flush"].get("capture")),
+                    agent=agent,
+                    session_id=session_id,
+                    background=True,
+                )
         log_injection_event(
             store_path=self.engine.store.path,
             hook="turn_complete",
@@ -298,6 +304,15 @@ class PreferenceHookManager:
         sync = None
         if not dry_run:
             sync = sync_injection_artifacts(self.engine.store.path).to_dict()
+        fitting = None
+        if not dry_run:
+            fitting = maybe_run_fitting_after_capture(
+                store_path=self.engine.store.path,
+                changed_records=_capture_changed_count(flush.get("capture")) + _capture_changed_count(full_capture),
+                agent=agent,
+                session_id=session_id,
+                background=True,
+            )
         log_injection_event(
             store_path=self.engine.store.path,
             hook="session_end",
@@ -309,6 +324,7 @@ class PreferenceHookManager:
                 "buffer_flush": flush,
                 "full_capture": full_capture,
                 "sync": sync,
+                "fitting": fitting,
             },
         )
         return {
@@ -319,6 +335,7 @@ class PreferenceHookManager:
             "buffer_flush": flush,
             "full_capture": full_capture,
             "sync": sync,
+            "fitting": fitting,
         }
 
     def flush_turn_buffer(self, agent: str, session_id: str, dry_run: bool = False) -> dict[str, Any]:
@@ -445,17 +462,17 @@ def _messages_from_payload(items: list[dict[str, Any]]) -> list[SessionMessage]:
 
 def _behavior_signal(action: str, result: str, metadata: dict[str, Any]) -> dict[str, str] | None:
     text = " ".join([action, result, json.dumps(metadata, ensure_ascii=False)]).casefold()
-    if _has_any(text, ("test", "pytest", "验证", "测试")) and _has_any(text, ("commit", "done", "完成", "提交", "汇报")):
+    if _has_any(text, ("test", "pytest", "verify", "verification")) and _has_any(text, ("commit", "done", "completed", "submit", "report")):
         return {
-            "title": "代码完成前验证",
-            "applies_to": "当 agent 修改代码、准备提交或汇报完成时",
-            "preference": "当 agent 修改代码、准备提交或汇报完成时，优先运行相关测试或验证。",
+            "title": "Pre-completion code verification",
+            "applies_to": "When the agent changes code, prepares to commit, or reports completion",
+            "preference": "When the agent changes code, prepares to commit, or reports completion, run relevant tests or verification first.",
         }
-    if _has_any(text, ("format", "formatter", "格式化")):
+    if _has_any(text, ("format", "formatter", "formatting")):
         return {
-            "title": "代码格式化偏好",
-            "applies_to": "当 agent 修改代码后",
-            "preference": "当 agent 修改代码后，保持代码格式化并遵循项目现有格式。",
+            "title": "Code formatting preference",
+            "applies_to": "After the agent changes code",
+            "preference": "After the agent changes code, keep formatting consistent with the existing project style.",
         }
     return None
 
@@ -470,3 +487,9 @@ def _env_int(name: str, default: int) -> int:
         return int(os.getenv(name, str(default)))
     except ValueError:
         return default
+
+
+def _capture_changed_count(capture: dict[str, Any] | None) -> int:
+    if not isinstance(capture, dict):
+        return 0
+    return sum(len(capture.get(key) or []) for key in ("added", "merged", "replaced", "conflicts"))

@@ -20,9 +20,9 @@ class PrivacyTests(unittest.TestCase):
         self.assertNotIn("UWLlzHRLof1xCiw4", redacted)
 
     def test_removes_replacement_characters_from_source_logs(self) -> None:
-        redacted = redact_sensitive("输出异常 ������ 修复方案")
-        self.assertEqual(redacted, "输出异常  修复方案")
-        self.assertNotIn("�", redacted)
+        redacted = redact_sensitive("output exception " + "\ufffd" * 6 + " fix plan")
+        self.assertEqual(redacted, "output exception  fix plan")
+        self.assertNotIn("\ufffd", redacted)
 
     def test_store_render_redacts_secret_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

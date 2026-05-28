@@ -1,46 +1,46 @@
 # Datailor Personal Preference Agent
 
-Datailor 是本地优先的个人偏好 MCP。你在回复用户、执行任务、写入外部系统、做确认决策之前，应优先读取 Datailor 返回的偏好决策；不要伪造用户偏好。
+Datailor is a local-first personal preference MCP. Before replying, executing tasks, writing to external systems, or making confirmation decisions, read the preference decision returned by Datailor; do not fabricate user preferences.
 
-## Session 启动
+## Session Start
 
-Session 开始时调用 `hook_session_start`，传入当前 agent、session_id、任务摘要和上下文。它会执行偏好决策、session prewarm，并写入注入观测日志。
+At session start, call `hook_session_start` with the current agent, `session_id`, task summary, and context. It runs preference decisioning, session prewarm, and injection observability logging.
 
-如果偏好库为空，Datailor 可能在首次工具调用时自动发现 Codex / Claude / Kimi 历史并执行冷启动扫描。不要要求用户手动填写 `source_path`，除非用户明确指定导入某个文件。
+If the preference store is empty, Datailor may automatically discover Codex / Claude / Kimi history and run a cold-start scan on the first tool call. Do not ask the user to manually provide `source_path` unless they explicitly specify a file to import.
 
-## 每轮回复前
+## Before Each Reply
 
-每条用户消息到达时调用 `hook_user_message`。如果该工具不可用，再调用 `get_preference_decision`。
+For every user message, call `hook_user_message`. If that tool is unavailable, call `get_preference_decision`.
 
-执行规则：
-- 返回 `decision: apply` 时，把 `agent_instruction` 作为本轮硬约束。
-- 返回 `decision: escalate` 且包含冲突时，只向用户简短询问本次采用哪条偏好，用户回答后调用 `resolve_preference_conflict`。
-- 返回 `no_preference` 时正常继续，不要编造偏好。
-- 高风险或不确定事项仍按用户确认流程处理。
+Rules:
+- When `decision: apply` is returned, treat `agent_instruction` as a hard instruction for this turn.
+- When `decision: escalate` includes a conflict, briefly ask the user which preference applies for this turn, then call `resolve_preference_conflict` after the user answers.
+- When `no_preference` is returned, continue normally and do not invent preferences.
+- High-risk or uncertain actions still follow normal user-confirmation rules.
 
-## Turn 与 Action 捕获
+## Turn And Action Capture
 
-每个 turn 完成后调用 `hook_turn_complete`，传入 `user_message` 和 `assistant_response`。该 hook 会按信号条件缓冲并批量补录偏好，不要自己逐条总结偏好。
+After each turn, call `hook_turn_complete` with `user_message` and `assistant_response`. The hook buffers qualifying signals and batch-extracts preferences; do not summarize preferences manually one by one.
 
-执行测试、格式化、提交、外部写入等动作后，如果有 action metadata，调用 `hook_action_executed`。
+After actions such as tests, formatting, commits, or external writes, call `hook_action_executed` when action metadata is available.
 
-Session 结束时调用 `hook_session_end`，让 Datailor flush turn buffer，并同步注入产物。
+At session end, call `hook_session_end` so Datailor can flush the turn buffer and sync injection artifacts.
 
-## 反馈闭环
+## Feedback Loop
 
-用户纠正、确认或拒绝某条偏好时，调用 `report_preference_feedback`：
-- correction：用户纠正了偏好或本次应用方式。
-- confirmation：用户确认偏好正确。
-- rejection：用户明确拒绝某条偏好。
+When the user corrects, confirms, or rejects a preference, call `report_preference_feedback`:
+- `correction`: the user corrected a preference or its application.
+- `confirmation`: the user confirmed a preference is correct.
+- `rejection`: the user explicitly rejected a preference.
 
-该工具会在可定位时真实更新 `个人偏好.md`，不只是写日志。
+When possible, this tool updates `personal-preferences.md` directly; it is not just a log write.
 
-## Manifesto 面板
+## Manifesto Panel
 
-当用户要求查看、审查、调整或理解个人偏好时，调用 `open_preference_panel`，返回本地 `localhost` 链接。不要在聊天中展开用户的完整偏好内容。
+When the user asks to view, review, adjust, or understand personal preferences, call `open_preference_panel` and return the local `localhost` link. Do not expand the user's full preference content in chat.
 
-`/preferences` 只是支持 MCP prompts 的客户端上的可选增强。Codex CLI、Kimi CLI 等客户端通常只识别自己的命令系统，因此通用入口是 `datailor doctor`、`datailor onboard` 和 `datailor ui`。
+`/preferences` is only an optional enhancement for MCP clients that support prompts. Codex CLI, Kimi CLI, and similar clients usually recognize their own command systems, so the reliable entry points are `datailor doctor`, `datailor onboard`, and `datailor ui`.
 
-## 可观测性
+## Observability
 
-所有 decide / hook / prewarm 调用都会写入注入日志。用户询问“偏好有没有生效”时，打开 Manifesto UI 的 Injection Log，让用户看到命中的偏好、注入时间和实际 `agent_instruction`。
+All decide / hook / prewarm calls write injection logs. When the user asks whether preferences are active, open the Manifesto UI Injection Log so they can inspect matched preferences, injection time, and the actual `agent_instruction`.

@@ -145,7 +145,7 @@ def analyze_memory_rot(records: list[PreferenceRecord], feedback: dict[str, Any]
                             type="conflict",
                             target_ids=[left.id, right.id],
                             risk="high",
-                            reason="两条偏好语义相近但表达了相反或不一致的行为要求，需要人工审查。",
+                            reason="Two preferences are semantically close but express opposite or inconsistent behavior requirements, so they need manual review.",
                             proposed_action="manual_review",
                             evidence=[_statement(left), _statement(right)],
                         )
@@ -159,7 +159,7 @@ def analyze_memory_rot(records: list[PreferenceRecord], feedback: dict[str, Any]
                             type="duplicate",
                             target_ids=[left.id, right.id],
                             risk="low",
-                            reason="两条偏好高度相似，可以合并证据后保留一条。",
+                            reason="Two preferences are highly similar and can be consolidated after their evidence is merged.",
                             proposed_action="merge",
                             evidence=[_statement(left), _statement(right)],
                         )
@@ -173,7 +173,7 @@ def analyze_memory_rot(records: list[PreferenceRecord], feedback: dict[str, Any]
                             type="overlap",
                             target_ids=[left.id, right.id],
                             risk="medium",
-                            reason="两条偏好覆盖相近场景，可能需要改写边界或合并适用范围。",
+                            reason="Two preferences cover similar scenarios and may need clearer boundaries or a merged scope.",
                             proposed_action="manual_review",
                             evidence=[_statement(left), _statement(right)],
                         )
@@ -188,7 +188,7 @@ def analyze_memory_rot(records: list[PreferenceRecord], feedback: dict[str, Any]
                     type="negative_feedback",
                     target_ids=[record.id],
                     risk="high",
-                    reason="这条偏好被用户拒绝或多次纠正，建议转入待审。",
+                    reason="This preference was rejected or corrected multiple times, so it should move back to review.",
                     proposed_action="mark_needs_review",
                     evidence=[_statement(record)],
                 )
@@ -201,7 +201,7 @@ def analyze_memory_rot(records: list[PreferenceRecord], feedback: dict[str, Any]
                     type="stale",
                     target_ids=[record.id],
                     risk="medium",
-                    reason="这条偏好长期未更新且动态置信度偏低，建议降权或转入待审。",
+                    reason="This active preference is stale and has low live confidence, so it should be downgraded or reviewed.",
                     proposed_action="downgrade",
                     evidence=[_statement(record)],
                 )
@@ -245,6 +245,7 @@ def apply_fitting_plan(
     accepted_change_ids: list[str],
     store_path: str | Path,
     fitting_dir: str | Path | None = None,
+    activate_added: bool = False,
 ) -> dict[str, Any]:
     if not accepted_change_ids:
         return {"ok": False, "error": "accepted_change_ids_required", "job_id": job_id, "applied": []}
@@ -252,6 +253,10 @@ def apply_fitting_plan(
     result = job_store.read_result(job_id)
     plan = job_store.read_apply_plan(job_id)
     accepted = set(accepted_change_ids)
+    known = {change.change_id for change in plan.changes}
+    unknown = sorted(accepted - known)
+    if unknown:
+        return {"ok": False, "error": "unknown_change_ids", "job_id": job_id, "unknown_change_ids": unknown, "applied": []}
     insights = {item.id: item for item in result.insights}
     store = MarkdownPreferenceStore(store_path)
     store.ensure()
@@ -260,6 +265,8 @@ def apply_fitting_plan(
     for change in plan.changes:
         if change.change_id not in accepted:
             continue
+        if change.status != "pending":
+            continue
         if change.type == "add_preference":
             insight_data = change.payload.get("insight") if isinstance(change.payload, dict) else {}
             insight = insights.get(change.record_id) or (
@@ -267,7 +274,11 @@ def apply_fitting_plan(
             )
             if not insight:
                 continue
-            records.append(insight.to_preference_record())
+            record = insight.to_preference_record()
+            if activate_added:
+                record.status = "active"
+            records.append(record)
+            change.status = "applied"
             applied.append({"change_id": change.change_id, "action": "add_preference"})
             continue
         suggestion_data = change.payload.get("suggestion") if isinstance(change.payload, dict) else {}
@@ -288,17 +299,41 @@ def apply_fitting_plan(
             elif change.type == "merge":
                 record.status = "needs_review"
             record.touch()
+            change.status = "applied"
             applied.append({"change_id": change.change_id, "action": change.type, "target_id": target_id})
     if applied:
         store.save(records)
+        _write_review_state(job_store, result, plan)
     readback = MarkdownPreferenceStore(store.path).load()
+    remaining = _pending_change_ids(plan)
     return {
         "ok": True,
         "job_id": job_id,
         "store": str(store.path),
         "applied": applied,
+        "remaining_pending": len(remaining),
+        "pending_change_ids": remaining,
         "readback_records": len(readback),
         "readback_ok": bool(readback or not records),
+    }
+
+
+def reject_fitting_plan(job_id: str, fitting_dir: str | Path | None = None) -> dict[str, Any]:
+    job_store = FittingJobStore(fitting_dir)
+    result = job_store.read_result(job_id)
+    plan = job_store.read_apply_plan(job_id)
+    rejected: list[str] = []
+    for change in plan.changes:
+        if change.status == "pending":
+            change.status = "rejected"
+            rejected.append(change.change_id)
+    _write_review_state(job_store, result, plan, force_reviewed=True)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "rejected": rejected,
+        "remaining_pending": 0,
+        "pending_change_ids": [],
     }
 
 
@@ -313,6 +348,34 @@ def list_fitting_jobs(fitting_dir: str | Path | None = None, limit: int = 20) ->
 def latest_fitting(fitting_dir: str | Path | None = None) -> dict[str, Any]:
     result = FittingJobStore(fitting_dir).latest_result()
     return {"ok": True, "job": result.to_dict() if result else None}
+
+
+def _pending_change_ids(plan: ApplyPlan) -> list[str]:
+    return [change.change_id for change in plan.changes if change.status == "pending"]
+
+
+def _write_review_state(
+    job_store: FittingJobStore,
+    result: FittingJobResult,
+    plan: ApplyPlan,
+    force_reviewed: bool = False,
+) -> None:
+    paths = job_store.paths_for_job(result.job_id)
+    pending = _pending_change_ids(plan)
+    if force_reviewed or (result.status == "pending_review" and not pending):
+        result.status = "reviewed"
+    result.apply_plan = plan
+    job_store.write_apply_plan(paths, plan)
+    job_store.write_result(result)
+    job_store.write_status(
+        paths,
+        result.status,
+        {
+            "report_file": result.report_file,
+            "result_file": result.result_file,
+            "pending_changes": len(pending),
+        },
+    )
 
 
 def _instruction_text(instructions: str, instructions_file: str | Path | None) -> str:
@@ -404,7 +467,7 @@ def _ignored_by_one_off_instruction(text: str, instruction: FittingInstruction) 
     ignore_blob = " ".join(instruction.ignore).casefold()
     if not ignore_blob:
         return False
-    wants_one_off_filter = any(term in ignore_blob for term in ("one-off", "install command", "安装命令", "一次性"))
+    wants_one_off_filter = any(term in ignore_blob for term in ("one-off", "install command", "temporary command"))
     if not wants_one_off_filter:
         return False
     lowered = text.casefold()
@@ -443,7 +506,7 @@ def _classify_kind(text: str) -> str:
         return "app_usage"
     if _looks_like_tool_quirk(text):
         return "tool_quirk"
-    if re.search(r"(流程|步骤|工作流|长任务|Harness|PRD|自检|验收)", text, re.I):
+    if re.search(r"(process|step|workflow|long task|Harness|PRD|self-check|acceptance)", text, re.I):
         return "workflow"
     if _looks_like_personal_habit(text):
         return "personal_habit"
@@ -456,83 +519,83 @@ def _classify_kind(text: str) -> str:
 
 def _looks_like_workflow(text: str) -> bool:
     return bool(
-        re.search(r"(先).{0,18}(再|然后|之后)", text)
-        or re.search(r"(流程|步骤|工作流|长任务|Harness|PRD|自检|验收)", text, re.I)
+        re.search(r"(first|before).{0,24}(then|after|next)", text, re.I)
+        or re.search(r"(process|step|workflow|long task|Harness|PRD|self-check|acceptance)", text, re.I)
     )
 
 
 def _looks_like_error_pattern(text: str) -> bool:
-    return bool(re.search(r"(经常|反复|总是).{0,24}(错|失败|漏|忘|没)|error pattern|常犯", text, re.I))
+    return bool(re.search(r"(often|repeatedly|always).{0,80}(wrong|fail|miss|forget)|error pattern|common mistake", text, re.I))
 
 
 def _looks_like_tool_quirk(text: str) -> bool:
-    return bool(re.search(r"(PowerShell|MCP|CLI|pipx|终端|工具|Obsidian|Linear|Kimi|Codex|Windows|UI|quirk)", text, re.I))
+    return bool(re.search(r"(PowerShell|MCP|CLI|pipx|terminal|tool|Obsidian|Linear|Kimi|Codex|Windows|UI|quirk)", text, re.I))
 
 
 def _looks_like_recovery_strategy(text: str) -> bool:
     return bool(
-        re.search(r"(失败|报错|异常|无法|不能|出错|blocked|fail|error).{0,36}(恢复|重试|回滚|修复|改用|降级|fallback|retry|rerun)", text, re.I)
-        or re.search(r"(失败|报错|异常|无法|不能|出错).{0,36}(说明|明确|记录|报告).{0,18}(原因|阻塞|限制)", text, re.I)
-        or re.search(r"(恢复策略|失败后|报错后|出错后|无法完成时|不能完成时)", text, re.I)
+        re.search(r"(failed|blocked|fail|error|exception|cannot|unable).{0,36}(recover|retry|rollback|fix|fallback|rerun|degrade)", text, re.I)
+        or re.search(r"(failed|error|exception|cannot|unable).{0,36}(explain|record|report).{0,18}(reason|blocker|limit)", text, re.I)
+        or re.search(r"(recovery strategy|after failure|after an error|when blocked|when unable to complete)", text, re.I)
     )
 
 
 def _looks_like_handoff_pattern(text: str) -> bool:
     return bool(
-        re.search(r"(完成|阶段性|收尾|交付|汇报|总结|交接|handoff).{0,40}(Linear|issue|更新|询问|说明|报告|评论)", text, re.I)
-        or re.search(r"(是否需要更新\s*Linear\s*issue|更新\s*Linear\s*issue)", text, re.I)
+        re.search(r"(done|completed|phase|wrap up|deliver|report|summary|handoff).{0,40}(Linear|issue|update|ask|explain|report|comment)", text, re.I)
+        or re.search(r"(update\s*Linear\s*issue|Linear\s*issue\s*update)", text, re.I)
     )
 
 
 def _looks_like_app_usage(text: str) -> bool:
     return bool(
-        re.search(r"(常用|使用|用|打开|管理|记录|写入).{0,30}(Obsidian|Linear|Slack|飞书|Notion|Excel|GitHub|Kimi|Codex|Claude)", text, re.I)
+        re.search(r"(use|open|manage|record|write).{0,30}(Obsidian|Linear|Slack|Lark|Notion|Excel|GitHub|Kimi|Codex|Claude)", text, re.I)
     )
 
 
 def _looks_like_personal_habit(text: str) -> bool:
-    return bool(re.search(r"(我习惯|用户习惯|我一般|我通常|我喜欢|偏好用|强迫症|习惯上)", text, re.I))
+    return bool(re.search(r"(my habit|user habit|I usually|I generally|I like|I prefer|by habit)", text, re.I))
 
 
 def _looks_like_project_convention(text: str) -> bool:
     return bool(
-        re.search(r"(项目|仓库|repo|README|AGENTS|文档|产品名|命名|目录|分支).{0,40}(统一|必须|不准|应该|约定|规范|Datailor|Fitting)", text, re.I)
-        or re.search(r"(产品名叫\s*Datailor|统一使用\s*Fitting|不准有旧称)", text, re.I)
+        re.search(r"(project|repo|README|AGENTS|docs|product name|naming|directory|branch).{0,40}(consistent|must|should|convention|standard|Datailor|Fitting)", text, re.I)
+        or re.search(r"(product name is\s*Datailor|use\s*Fitting\s*consistently|avoid old names)", text, re.I)
     )
 
 
 def _insight_from_text(kind: str, text: str, item: FittingInput) -> InsightRecord:
     title_prefix = {
-        "preference": "偏好",
-        "workflow": "工作流",
-        "error_pattern": "错误模式",
-        "tool_quirk": "工具特性",
-        "recovery_strategy": "恢复策略",
-        "handoff_pattern": "交接模式",
-        "app_usage": "常用应用",
-        "personal_habit": "个人习惯",
-        "project_convention": "项目约定",
-    }.get(kind, "模式")
+        "preference": "Preference",
+        "workflow": "Workflow",
+        "error_pattern": "Error pattern",
+        "tool_quirk": "Tool quirk",
+        "recovery_strategy": "Recovery strategy",
+        "handoff_pattern": "Handoff pattern",
+        "app_usage": "App usage",
+        "personal_habit": "Personal habit",
+        "project_convention": "Project convention",
+    }.get(kind, "Pattern")
     applies_to = {
-        "preference": "agent 回复、执行任务或做确认决策",
-        "workflow": "同类任务执行流程",
-        "error_pattern": "错误恢复与交付前检查",
-        "tool_quirk": "工具调用、终端、MCP 或 UI 操作",
-        "recovery_strategy": "失败恢复、重试或降级处理",
-        "handoff_pattern": "阶段性交付、收尾和任务交接",
-        "app_usage": "使用常用应用或外部系统时",
-        "personal_habit": "个人协作和表达习惯",
-        "project_convention": "当前项目、仓库或产品文档",
-    }.get(kind, "长期行为模式")
+        "preference": "agent replies, task execution, or confirmation decisions",
+        "workflow": "execution flow for similar tasks",
+        "error_pattern": "error recovery and pre-delivery checks",
+        "tool_quirk": "tool calls, terminal usage, MCP, or UI operations",
+        "recovery_strategy": "failure recovery, retries, or fallback handling",
+        "handoff_pattern": "phase delivery, wrap-up, and task handoff",
+        "app_usage": "when using common applications or external systems",
+        "personal_habit": "personal collaboration and expression habits",
+        "project_convention": "current project, repository, or product documentation",
+    }.get(kind, "long-term behavior pattern")
     return InsightRecord(
         id=f"insight-{uuid5(NAMESPACE_URL, f'{kind}:{item.source}:{text}').hex[:8]}",
         kind=kind,
-        title=f"{title_prefix}：{_short(text, 36)}",
+        title=f"{title_prefix}: {_short(text, 36)}",
         summary=_short(text, 160),
         guidance=text,
         applies_to=applies_to,
         triggers=_infer_triggers(kind, text),
-        exceptions=["用户明确给出相反要求时，以当前任务要求为准"],
+        exceptions=["When the user explicitly gives a conflicting instruction, follow the current task requirement."],
         confidence="medium",
         status="draft",
         evidence=[
@@ -552,6 +615,8 @@ def _has_similar_insight(candidate: InsightRecord, existing: list[InsightRecord]
             continue
         if semantic_similarity(item.guidance, candidate.guidance) >= 0.90:
             item.evidence.extend(candidate.evidence)
+            if item.kind == "preference" and len(item.evidence) >= 3:
+                item.confidence = "high"
             return True
     return False
 
@@ -587,7 +652,7 @@ def _input_labels(inputs: list[FittingInput]) -> list[str]:
 
 
 def _sentences(text: str) -> list[str]:
-    parts = [part.strip() for part in re.split(r"[。！？!?；;\n]+", text) if part.strip()]
+    parts = [part.strip() for part in re.split(r"[.!?;\n]+", text) if part.strip()]
     return parts or [text.strip()]
 
 
@@ -597,28 +662,28 @@ def _clean(text: str) -> str:
 
 def _short(text: str, limit: int) -> str:
     text = _clean(text)
-    return text if len(text) <= limit else text[: max(0, limit - 1)] + "…"
+    return text if len(text) <= limit else text[: max(0, limit - 3)] + "..."
 
 
 def _infer_triggers(kind: str, text: str) -> list[str]:
     if kind == "workflow":
-        return ["同类任务", "长程任务", "交付前"]
+        return ["similar task", "long-running task", "before delivery"]
     if kind == "error_pattern":
-        return ["类似错误再次出现", "交付前自检"]
+        return ["similar error appears again", "pre-delivery self-check"]
     if kind == "tool_quirk":
-        return ["使用相关工具时"]
+        return ["when using related tools"]
     if kind == "recovery_strategy":
-        return ["失败或报错时", "恢复任务时"]
+        return ["when a failure or error occurs", "when recovering a task"]
     if kind == "handoff_pattern":
-        return ["阶段性成果完成后", "交付或收尾时"]
+        return ["after phase completion", "during delivery or wrap-up"]
     if kind == "app_usage":
-        return ["使用相关应用时"]
+        return ["when using related applications"]
     if kind == "personal_habit":
-        return ["协作方式相关任务"]
+        return ["collaboration-style tasks"]
     if kind == "project_convention":
-        return ["当前项目或仓库内"]
+        return ["within the current project or repository"]
     triggers = []
-    for marker in ("回复", "测试", "文档", "回读", "Linear", "中文", "UI"):
+    for marker in ("reply", "test", "document", "read back", "Linear", "English", "UI"):
         if marker.casefold() in text.casefold():
             triggers.append(marker)
     return triggers[:5]

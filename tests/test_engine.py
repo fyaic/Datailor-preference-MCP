@@ -23,10 +23,10 @@ class PreferenceEngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             store = Path(temp) / "prefs.md"
             engine = self.make_engine(store)
-            decision = engine.decide("我准备改代码并提交最终回复", agent="codex")
+            decision = engine.decide("I am preparing to change code and submit the final reply.", agent="codex")
             self.assertEqual(decision["decision"], "no_preference")
             self.assertTrue(decision["escalate"])
-            self.assertIn("偏好库", decision["reason"])
+            self.assertIn("Preference store", decision["reason"])
 
     def test_initial_capture_writes_markdown_records(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -37,9 +37,9 @@ class PreferenceEngineTests(unittest.TestCase):
             records = MarkdownPreferenceStore(store).load()
             self.assertGreaterEqual(len(records), 2)
             text = store.read_text(encoding="utf-8")
-            self.assertIn("验证", text)
+            self.assertIn("verification", text.casefold())
             self.assertNotIn("```json preference-record", text)
-            self.assertIn("## 已确认偏好", text)
+            self.assertIn("## Active Preferences", text)
 
     def test_semantic_decision_matches_variant_task(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -47,13 +47,13 @@ class PreferenceEngineTests(unittest.TestCase):
             engine = self.make_engine(store)
             engine.capture_path(ROOT / "examples" / "cold_start_session.md")
             decision = engine.decide(
-                "实现完成后，我是否应该先做验证并检查回归风险？",
+                "After implementation, should I verify first and check regression risk?",
                 context={"language": "Python"},
                 agent="codex",
             )
             self.assertEqual(decision["decision"], "apply")
             instructions = json.dumps(decision, ensure_ascii=False)
-            self.assertIn("验证", instructions)
+            self.assertIn("verification", instructions.casefold())
 
     def test_incremental_capture_replaces_explicit_change(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -64,7 +64,7 @@ class PreferenceEngineTests(unittest.TestCase):
             records = MarkdownPreferenceStore(store).load()
             self.assertGreaterEqual(len(records), 2)
             self.assertTrue(result.replaced or result.merged or result.added)
-            self.assertIn("明确说明", store.read_text(encoding="utf-8"))
+            self.assertIn("explain why", store.read_text(encoding="utf-8"))
 
     def test_capture_dry_run_filters_raw_one_off_fragments(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -74,10 +74,10 @@ class PreferenceEngineTests(unittest.TestCase):
                 source="quality-regression",
                 session_id="bad-fragments",
                 messages=[
-                    SessionMessage(role="user", content="B 而且必须无头。"),
-                    SessionMessage(role="user", content="我稍微调整了一下 请保留不要覆盖。"),
-                    SessionMessage(role="user", content="应该就在obsidian本地目录的.plugin 请问能否合成一个文件夹？"),
-                    SessionMessage(role="user", content="我希望在微信ide里面预览但是一直没有加载出来，请检查以下代码。"),
+                    SessionMessage(role="user", content="B and it must be headless."),
+                    SessionMessage(role="user", content="I tweaked it slightly; keep it and do not overwrite."),
+                    SessionMessage(role="user", content="It should be in the local Obsidian .plugin directory; can it be one folder?"),
+                    SessionMessage(role="user", content="I want to preview this in the WeChat IDE, but it never loads. Check the code."),
                 ],
             )
 
@@ -95,7 +95,7 @@ class PreferenceEngineTests(unittest.TestCase):
             session = Session(
                 source="quality-regression",
                 session_id="good-preference",
-                messages=[SessionMessage(role="user", content="以后默认回复我中文。")],
+                messages=[SessionMessage(role="user", content="From now on, reply to me in English by default.")],
             )
 
             result = engine.capture_session(session, dry_run=True)
@@ -117,7 +117,7 @@ class PreferenceEngineTests(unittest.TestCase):
                         "name": "get_preference_decision",
                         "arguments": {
                             "agent": "openclaw",
-                            "task": "代码写完后准备直接回复用户",
+                            "task": "Ready to reply to the user after finishing the code",
                             "context": {"risk": "medium"},
                         },
                     },

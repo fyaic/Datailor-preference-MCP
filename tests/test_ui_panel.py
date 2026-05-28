@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from preference_agent.backends import HeuristicBackend
@@ -78,7 +79,7 @@ class UiPanelTests(unittest.TestCase):
 
             self.assertEqual(manifesto["summary"]["active"], 1)
             self.assertEqual(manifesto["summary"]["pending"], 1)
-            self.assertEqual(manifesto["mode"], "autonomous")
+            self.assertEqual(manifesto["mode"], "curate")
             self.assertEqual(manifesto["language"], "en")
             self.assertEqual(len(manifesto["preferences"]), 2)
             self.assertIn("live_confidence", manifesto["preferences"][0])
@@ -142,15 +143,25 @@ class UiPanelTests(unittest.TestCase):
             self.assertEqual(data["summary"]["active"], 1)
             self.assertIn("Run relevant tests", json.dumps(data))
 
+            with urlopen(info.url + "/index.html", timeout=5) as response:
+                html = response.read().decode("utf-8")
+            self.assertIn('href="/static/favicon.png"', html)
+
+            with urlopen(info.url + "/static/favicon.png", timeout=5) as response:
+                favicon = response.read()
+                content_type = response.headers.get("Content-Type", "")
+            self.assertEqual(content_type, "image/png")
+            self.assertTrue(favicon.startswith(b"\x89PNG\r\n\x1a\n"))
+
             request = Request(
                 info.url + "/api/settings",
-                data=json.dumps({"mode": "curated", "theme": "dark", "language": "zh"}).encode("utf-8"),
+                data=json.dumps({"mode": "curate", "theme": "dark", "language": "zh"}).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
             with urlopen(request, timeout=5) as response:
                 updated = json.loads(response.read().decode("utf-8"))
-            self.assertEqual(updated["settings"]["mode"], "curated")
+            self.assertEqual(updated["settings"]["mode"], "curate")
             self.assertEqual(updated["settings"]["theme"], "dark")
             self.assertEqual(updated["settings"]["language"], "zh")
 
@@ -274,6 +285,25 @@ class UiPanelTests(unittest.TestCase):
             self.assertEqual(after["summary"]["active"], 0)
             self.assertEqual(after["summary"]["pending"], 0)
             self.assertEqual(MarkdownPreferenceStore(store).load(), [])
+
+    def test_ui_fitting_reject_missing_job_returns_404(self) -> None:
+        with tempfile.TemporaryDirectory() as temp, patch.dict(
+            os.environ,
+            {"DATAILOR_FITTING_DIR": str(Path(temp) / ".fitting")},
+            clear=False,
+        ):
+            root = Path(temp)
+            store = root / "prefs.md"
+            MarkdownPreferenceStore(store).ensure()
+            info = ensure_ui_server(store_path=store, port=0, ui_dir=root / "ui")
+
+            with self.assertRaises(HTTPError) as caught:
+                post_json(info.url + "/api/fitting/reject", {"job_id": "missing"})
+
+            self.assertEqual(caught.exception.code, 404)
+            payload = json.loads(caught.exception.read().decode("utf-8"))
+            self.assertFalse(payload["ok"])
+            self.assertIn("job not found: missing", payload["error"])
 
     def test_ui_correction_updates_preference_text_and_activates_it(self) -> None:
         with tempfile.TemporaryDirectory() as temp, patch.dict(

@@ -15,9 +15,9 @@ class QualityScore:
     overall: float
 
 
-NEGATION_WORDS = ("不要", "别", "不必", "无需", "避免", "禁止", "不能", "不喜欢")
-DETAIL_WORDS = ("详细", "展开", "完整", "解释", "长文")
-CONCISE_WORDS = ("简洁", "简短", "短一点", "不要长文", "别啰嗦", "少废话")
+NEGATION_WORDS = ("do not", "avoid", "forbid", "dislike", "no ")
+DETAIL_WORDS = ("detailed", "expand", "complete", "explain", "long-form")
+CONCISE_WORDS = ("concise", "brief", "short", "no long answers", "less verbose")
 
 
 def refine_records(records: list[PreferenceRecord]) -> list[PreferenceRecord]:
@@ -66,7 +66,7 @@ def quality_score(record: PreferenceRecord) -> QualityScore:
         clarity += 0.20
     if record.triggers:
         clarity += 0.10
-    if any(word in text for word in ("当", "如果", "默认", "不要", "必须", "优先", "以后")):
+    if any(word in text.casefold() for word in ("when", "if", "default", "do not", "must", "prioritize", "from now on")):
         clarity += 0.15
     evidence = min(1.0, 0.35 + 0.2 * len(record.evidence))
     overall = round(0.45 * confidence + 0.35 * min(1.0, clarity) + 0.20 * evidence, 4)
@@ -103,13 +103,10 @@ def _normalize_applies_to(record: PreferenceRecord) -> None:
     applies_to = " ".join(record.applies_to.split()).strip()
     if not applies_to:
         return
-    if applies_to.startswith("当"):
+    if applies_to.casefold().startswith("when "):
         record.applies_to = applies_to
         return
-    if applies_to.endswith("时"):
-        record.applies_to = f"当{applies_to}"
-    else:
-        record.applies_to = f"当{applies_to}时"
+    record.applies_to = f"When {applies_to[0].lower()}{applies_to[1:]}" if applies_to else applies_to
 
 
 def _has_negation(text: str) -> bool:
@@ -123,13 +120,15 @@ def _has_any(text: str, words: tuple[str, ...]) -> bool:
 
 def _quality_category(text: str) -> str:
     lowered = text.casefold()
-    if any(word in lowered for word in ("review", "审查", "边界情况", "异常路径", "回归风险", "bug")):
+    if any(word in lowered for word in ("review", "edge case", "exception path", "regression risk", "bug")):
         return "review"
-    if any(word in lowered for word in ("测试", "验证", "coverage", "覆盖率", "pytest", "test")):
+    if any(word in lowered for word in ("read back", "external system", "external write", "encoding")):
+        return "external-write"
+    if any(word in lowered for word in ("test", "verify", "coverage", "pytest")):
         return "test"
-    if any(word in lowered for word in ("文档", "沉淀", "复盘", "markdown")):
+    if any(word in lowered for word in ("document", "documentation", "retrospective", "markdown")):
         return "docs"
-    if any(word in lowered for word in ("回复", "回答", "结论", "大纲", "简洁", "长文")):
+    if any(word in lowered for word in ("reply", "answer", "conclusion", "outline", "concise", "long-form")):
         return "reply"
     if any(word in lowered for word in ("linear", "issue")):
         return "linear"

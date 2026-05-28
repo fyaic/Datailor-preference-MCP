@@ -17,12 +17,15 @@ from .executive_summary import read_executive_summary, refresh_executive_summary
 from .feedback import feedback_report, record_feedback
 from .incremental import scan_incremental
 from .injection import prewarm_session, sync_injection_artifacts
+from .integrations import DEFAULT_SERVER_NAME, run_integrations
+from .kimi_hooks import install_kimi_hooks
 from .onboarding import get_onboarding_status, run_onboarding
 from .paths import default_store_path
 from .preference_actions import apply_preference_feedback
 from .snapshots import list_store_snapshots, restore_store_snapshot
 from .store import MarkdownPreferenceStore
 from .fitting import apply_fitting_plan, get_fitting_job, list_fitting_jobs, run_fitting
+from .fitting_background import mark_fitting_plan_reviewed, run_fitting_for_mode
 
 
 def build_engine(args: argparse.Namespace) -> PreferenceEngine:
@@ -57,6 +60,14 @@ def main(argv: list[str] | None = None) -> int:
     onboard.add_argument("--open-ui", action="store_true", help="Open the Manifesto UI after onboarding")
     onboard.add_argument("--host", default=os.getenv("PREFERENCE_UI_HOST", "127.0.0.1"))
     onboard.add_argument("--port", type=int, default=int(os.getenv("PREFERENCE_UI_PORT", "8080")))
+    onboard.add_argument("--no-agent-rules", action="store_true", help="Do not auto-install the Datailor AGENTS.md managed block")
+    onboard.add_argument("--agent-rules-target", default="", help="Override the AGENTS.md target path")
+    onboard.add_argument("--no-kimi-hooks", action="store_true", help="Do not auto-install Kimi CLI lifecycle hooks when --agent kimi")
+    onboard.add_argument("--kimi-hooks-target", default="", help="Override the Kimi config.toml path")
+    onboard.add_argument("--integrate-client", action="append", default=[], choices=["all", "codex", "claude", "kimi"], help="Explicitly install client integration during onboarding; repeatable")
+    onboard.add_argument("--integrate-scope", default="default", choices=["default", "user", "project", "local"], help="Scope used for --integrate-client")
+    onboard.add_argument("--integrate-project-root", default="", help="Project root used for project/local integration scope")
+    onboard.add_argument("--integrate-dry-run", action="store_true", help="Preview --integrate-client changes without writing client config")
     onboard.add_argument("--json", action="store_true", help="Print structured JSON instead of the human summary")
     onboard.add_argument("--quiet", action="store_true", help="Print only the final status and next command")
 
@@ -64,10 +75,33 @@ def main(argv: list[str] | None = None) -> int:
     install_rules.add_argument("--target", default="", help="Target AGENTS.md path; defaults to ~/AGENTS.md")
     install_rules.add_argument("--snippet", default="", help="Override snippet path")
 
+    install_kimi = sub.add_parser("install-kimi-hooks", parents=[common], help="Install or update Datailor hooks in Kimi CLI config.toml")
+    install_kimi.add_argument("--agent", default="kimi")
+    install_kimi.add_argument("--target", default="", help="Target Kimi config.toml path; defaults to ~/.kimi/config.toml")
+    install_kimi.add_argument("--command", dest="hook_command", default="datailor-kimi-hook", help="Hook command written into config.toml")
+    install_kimi.add_argument("--timeout", type=int, default=20)
+
     mcp_config = sub.add_parser("mcp-config", parents=[common], help="Print MCP client config for installed Datailor")
     mcp_config.add_argument("--agent", default=os.getenv("PREFERENCE_CALLER_AGENT", "codex"))
-    mcp_config.add_argument("--server-name", default="datailor-preference")
+    mcp_config.add_argument("--server-name", default=DEFAULT_SERVER_NAME)
     mcp_config.add_argument("--command", dest="mcp_command", default="datailor-mcp")
+    mcp_config.add_argument("--no-agent-rules", action="store_true", help="Do not auto-install the Datailor AGENTS.md managed block")
+    mcp_config.add_argument("--agent-rules-target", default="", help="Override the AGENTS.md target path")
+    mcp_config.add_argument("--no-kimi-hooks", action="store_true", help="Do not auto-install Kimi CLI lifecycle hooks when --agent kimi")
+    mcp_config.add_argument("--kimi-hooks-target", default="", help="Override the Kimi config.toml path")
+
+    integrate = sub.add_parser("integrate", parents=[common], help="Install, remove, inspect, or export Datailor client integrations")
+    integrate_sub = integrate.add_subparsers(dest="integrate_action", required=True)
+    for action_name in ["status", "install", "remove", "doctor", "export-plugin"]:
+        action = integrate_sub.add_parser(action_name, help=f"{action_name} Datailor client integration")
+        action.add_argument("--client", default="all", choices=["all", "codex", "claude", "kimi"])
+        action.add_argument("--scope", default="default", choices=["default", "user", "project", "local"])
+        action.add_argument("--project-root", default="")
+        action.add_argument("--server-name", default=DEFAULT_SERVER_NAME)
+        action.add_argument("--command", dest="mcp_command", default="datailor-mcp")
+        action.add_argument("--dry-run", action="store_true")
+        action.add_argument("--output", default="", help="Output directory for export-plugin")
+        action.add_argument("--json", action="store_true", help="Print structured JSON")
 
     sub.add_parser("init", parents=[common], help="Create an empty cold-start preference store")
 
@@ -145,8 +179,12 @@ def main(argv: list[str] | None = None) -> int:
     fitting.add_argument("--instructions-file", default="", help="Read Fitting instructions from a UTF-8 text file")
     fitting.add_argument("--fitting-dir", default="", help="Override the local Fitting artifact directory")
     fitting.add_argument("--max-files", type=int, default=0)
-    fitting.add_argument("--review", action="store_true", default=True, help="Generate drafts/report without applying changes")
+    review_group = fitting.add_mutually_exclusive_group()
+    review_group.add_argument("--review", action="store_true", dest="review", help="Generate drafts/report without applying changes")
+    review_group.add_argument("--no-review", action="store_false", dest="review", help="Mark the Fitting run as non-review metadata")
+    fitting.set_defaults(review=True)
     fitting.add_argument("--dry-run", action="store_true", help="Build result in memory without writing job artifacts")
+    fitting.add_argument("--auto-apply", action="store_true", help="Apply high-confidence preference changes after Fitting")
     fitting.add_argument("--json", action="store_true", help="Print structured JSON instead of the human summary")
     fitting.add_argument("--quiet", action="store_true", help="Print only final status and report path")
 
@@ -207,16 +245,71 @@ def main(argv: list[str] | None = None) -> int:
             open_ui=args.open_ui,
             host=args.host,
             port=args.port,
+            install_agent_rules_enabled=not args.no_agent_rules,
+            agent_rules_target=args.agent_rules_target or None,
+            install_kimi_hooks_enabled=False if args.no_kimi_hooks else None,
+            kimi_hooks_target=args.kimi_hooks_target or None,
             progress=progress,
         )
+        if args.integrate_client:
+            integrations = []
+            integration_store = args.store if _arg_was_provided(raw_argv, "--store") or os.getenv("PREFERENCE_STORE_PATH") else None
+            for integrate_client in args.integrate_client:
+                integrations.append(
+                    run_integrations(
+                        action="install",
+                        client=integrate_client,
+                        scope=args.integrate_scope,
+                        project_root=args.integrate_project_root or None,
+                        dry_run=args.dry_run or args.integrate_dry_run,
+                        backend=args.backend,
+                        store=integration_store,
+                    )
+                )
+            result["integrations"] = integrations
         if args.json:
             return _print(result)
         return _print_text(render_onboarding_summary(result, quiet=args.quiet))
     if args.command == "install-agent-rules":
         result = install_agent_rules(target=args.target or None, snippet=args.snippet or None)
         return _print(result.to_dict())
+    if args.command == "install-kimi-hooks":
+        result = install_kimi_hooks(
+            target=args.target or None,
+            command=args.hook_command,
+            agent=args.agent,
+            backend=args.backend,
+            store=args.store,
+            timeout=args.timeout,
+        )
+        return _print(result.to_dict())
     if args.command == "mcp-config":
+        if not args.no_agent_rules:
+            agent_rules = install_agent_rules(target=args.agent_rules_target or None)
+            _print_agent_rules_notice(agent_rules.to_dict())
+        if args.agent.strip().casefold() == "kimi" and not args.no_kimi_hooks:
+            kimi_hooks = install_kimi_hooks(
+                target=args.kimi_hooks_target or None,
+                agent=args.agent,
+                backend=args.backend,
+                store=args.store,
+            )
+            _print_kimi_hooks_notice(kimi_hooks.to_dict())
         return _print(_build_mcp_config(args, raw_argv))
+    if args.command == "integrate":
+        result = run_integrations(
+            action=args.integrate_action,
+            client=args.client,
+            scope=args.scope,
+            project_root=args.project_root or None,
+            dry_run=args.dry_run,
+            output_dir=args.output or None,
+            server_name=args.server_name,
+            mcp_command=args.mcp_command,
+            backend=args.backend,
+            store=args.store if _arg_was_provided(raw_argv, "--store") or os.getenv("PREFERENCE_STORE_PATH") else None,
+        )
+        return _print(result)
     if args.command == "init":
         engine.init_store()
         return _print({"ok": True, "store": str(args.store), "state": "cold_start"})
@@ -315,6 +408,20 @@ def main(argv: list[str] | None = None) -> int:
             return _print(result.to_dict())
         return _print_text(render_cold_start_summary(result, quiet=args.quiet))
     if args.command == "fitting":
+        if args.auto_apply and not args.dry_run:
+            payload = run_fitting_for_mode(
+                store_path=args.store,
+                mode="auto",
+                agent=args.agent,
+                source=args.source or None,
+                instructions=args.instructions,
+                instructions_file=args.instructions_file or None,
+                fitting_dir=args.fitting_dir or None,
+                max_files=args.max_files,
+            )
+            if args.json:
+                return _print(payload)
+            return _print_text(_render_fitting_cli_summary(payload.get("result") or {}, quiet=args.quiet))
         result = run_fitting(
             store_path=args.store,
             instructions=args.instructions,
@@ -332,20 +439,29 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "fitting-list":
         return _print(list_fitting_jobs(fitting_dir=args.fitting_dir or None, limit=args.limit))
     if args.command == "fitting-show":
-        result = get_fitting_job(args.job_id, fitting_dir=args.fitting_dir or None)
+        try:
+            result = get_fitting_job(args.job_id, fitting_dir=args.fitting_dir or None)
+        except ValueError as exc:
+            return _print({"ok": False, "error": str(exc), "job_id": args.job_id})
         if args.report:
-            report_file = Path(str(result.get("report_file") or ""))
-            return _print_text(report_file.read_text(encoding="utf-8") if report_file.exists() else "")
+            report_path = str(result.get("report_file") or "").strip()
+            report_file = Path(report_path) if report_path else None
+            return _print_text(report_file.read_text(encoding="utf-8") if report_file and report_file.exists() and report_file.is_file() else "")
         if args.json:
             return _print({"ok": True, **result})
         return _print_text(_render_fitting_cli_summary(result, quiet=False))
     if args.command == "fitting-apply":
-        result = apply_fitting_plan(
-            job_id=args.job_id,
-            accepted_change_ids=args.accept,
-            store_path=args.store,
-            fitting_dir=args.fitting_dir or None,
-        )
+        try:
+            result = apply_fitting_plan(
+                job_id=args.job_id,
+                accepted_change_ids=args.accept,
+                store_path=args.store,
+                fitting_dir=args.fitting_dir or None,
+            )
+        except ValueError as exc:
+            return _print({"ok": False, "error": str(exc), "job_id": args.job_id})
+        if result.get("ok") and not result.get("remaining_pending"):
+            mark_fitting_plan_reviewed(args.job_id, accepted=len(result.get("applied") or []))
         return _print(result)
     if args.command == "ui":
         from .ui.server import run_ui_server
@@ -414,6 +530,20 @@ def _build_mcp_config(args: argparse.Namespace, raw_argv: list[str]) -> dict[str
             }
         }
     }
+
+
+def _print_agent_rules_notice(result: dict[str, Any]) -> None:
+    action = "updated" if result.get("changed") else "already current"
+    print(f"Datailor AGENTS managed block: {action}", file=sys.stderr)
+    print(f"Target: {result.get('target', '')}", file=sys.stderr)
+    print(f"Markers: {result.get('managed_start', '')} ... {result.get('managed_end', '')}", file=sys.stderr)
+
+
+def _print_kimi_hooks_notice(result: dict[str, Any]) -> None:
+    action = "updated" if result.get("changed") else "already current"
+    print(f"Datailor Kimi hooks: {action}", file=sys.stderr)
+    print(f"Target: {result.get('target', '')}", file=sys.stderr)
+    print(f"Events: {', '.join(result.get('events') or [])}", file=sys.stderr)
 
 
 def _arg_was_provided(argv: list[str], name: str) -> bool:

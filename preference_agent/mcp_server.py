@@ -16,11 +16,13 @@ from .feedback import record_feedback
 from .hooks import PreferenceHookManager
 from .injection import prewarm_session, sync_injection_artifacts
 from .onboarding import get_onboarding_status, run_onboarding
-from .paths import default_store_path
+from .paths import default_store_path, package_version
 from .preference_actions import apply_preference_feedback
 from .store import MarkdownPreferenceStore
 from .ui.server import open_preference_panel
 from .fitting import apply_fitting_plan, get_fitting_job, latest_fitting, run_fitting
+from .fitting_background import mark_fitting_plan_reviewed, run_fitting_for_mode
+from .fitting_trigger import normalize_mode
 
 
 _AUTO_COLD_START_DONE: set[str] = set()
@@ -86,7 +88,7 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
             {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}, "prompts": {"listChanged": False}},
-                "serverInfo": {"name": "datailor-preference-mcp", "version": "0.1.0"},
+                "serverInfo": {"name": "datailor-preference-mcp", "version": package_version()},
             },
         )
     if method == "tools/list":
@@ -123,6 +125,8 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
             )
             return _tool_response(request_id, result.to_dict())
         if name == "start_cold_start_capture":
+            install_rules_arg = arguments.get("install_agent_rules")
+            install_kimi_hooks_arg = arguments.get("install_kimi_hooks")
             result = run_onboarding(
                 store_path=engine.store.path,
                 agent_hint=str(arguments.get("agent") or os.getenv("PREFERENCE_CALLER_AGENT") or "agent"),
@@ -136,6 +140,10 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
                 open_ui=bool(arguments.get("open_ui", False)),
                 host=str(arguments.get("host") or "127.0.0.1"),
                 port=int(arguments.get("port") or 8080),
+                install_agent_rules_enabled=True if install_rules_arg is None else bool(install_rules_arg),
+                agent_rules_target=arguments.get("agent_rules_target") or None,
+                install_kimi_hooks_enabled=None if install_kimi_hooks_arg is None else bool(install_kimi_hooks_arg),
+                kimi_hooks_target=arguments.get("kimi_hooks_target") or None,
             )
             return _tool_response(request_id, result)
         if name == "capture_preferences_from_session":
@@ -170,7 +178,7 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
             auto_discovery = _maybe_auto_cold_start(engine, agent=agent)
             result = prewarm_session(
                 store_path=engine.store.path,
-                task=arguments.get("task") or "新 Session 初始化",
+                task=arguments.get("task") or "new session initialization",
                 agent=agent,
                 context=arguments.get("context") or {},
                 output_dir=arguments.get("output_dir") or None,
@@ -299,6 +307,22 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
                 result["auto_discovery"] = auto_discovery
             return _tool_response(request_id, result)
         if name == "start_fitting":
+            mode_argument = arguments.get("mode")
+            auto_apply_requested = bool(arguments.get("auto_apply", False))
+            mode = normalize_mode(mode_argument or ("auto" if auto_apply_requested else "curate"))
+            # Explicit mode wins: mode="auto" means auto-apply even if auto_apply is false.
+            if (auto_apply_requested or mode_argument) and not bool(arguments.get("dry_run", False)):
+                result = run_fitting_for_mode(
+                    store_path=engine.store.path,
+                    mode=mode,
+                    agent=str(arguments.get("agent") or os.getenv("PREFERENCE_CALLER_AGENT") or "agent"),
+                    source=arguments.get("source") or None,
+                    instructions=str(arguments.get("instructions") or ""),
+                    instructions_file=arguments.get("instructions_file") or None,
+                    fitting_dir=arguments.get("fitting_dir") or None,
+                    max_files=int(arguments.get("max_files") or 0),
+                )
+                return _tool_response(request_id, result)
             result = run_fitting(
                 store_path=engine.store.path,
                 instructions=str(arguments.get("instructions") or ""),
@@ -326,6 +350,8 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
                 store_path=engine.store.path,
                 fitting_dir=arguments.get("fitting_dir") or None,
             )
+            if result.get("ok") and not result.get("remaining_pending"):
+                mark_fitting_plan_reviewed(str(arguments.get("job_id") or ""), accepted=len(result.get("applied") or []))
             return _tool_response(request_id, result)
         return _error(request_id, -32601, f"Unknown tool: {name}")
     return _error(request_id, -32601, f"Unknown method: {method}")
@@ -474,178 +500,182 @@ PROMPTS = [
 TOOLS = [
     {
         "name": "get_onboarding_status",
-        "description": "检查 Datailor 是否已完成首次配置：MCP 是否可用、偏好库是否为空、是否发现本地 agent 历史，以及下一步命令。",
+        "description": "Check whether Datailor has completed first-run setup: MCP availability, empty store state, discovered local agent histories, and next commands.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "agent": {"type": "string", "description": "调用方 agent 名称，例如 codex/kimi/claude"},
+                "agent": {"type": "string", "description": "Caller agent name, such as codex/kimi/claude"},
             },
         },
     },
     {
         "name": "start_cold_start_capture",
-        "description": "启动客户端无关的冷启动捕获：初始化偏好库、自动发现 Claude/Codex/Kimi 历史并扫描。等价于 CLI `datailor onboard` 的捕获部分。",
+        "description": "Start client-independent cold-start capture: initialize the preference store, auto-discover Claude/Codex/Kimi histories, and scan them. Equivalent to the capture part of CLI `datailor onboard`.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "agent": {"type": "string", "description": "调用方 agent 名称，用于发现源排序"},
-                "mode": {"type": "string", "description": "capture mode，例如 recall-extract 或 semantic-extract"},
-                "max_files": {"type": "integer", "description": "可选扫描文件数上限；默认不限制"},
-                "max_minutes": {"type": "number", "description": "单个源的可选运行时长上限；默认不限制"},
-                "dry_run": {"type": "boolean", "description": "只演练，不写入偏好库"},
-                "open_ui": {"type": "boolean", "description": "完成后尝试打开本地 Manifesto UI"},
-                "host": {"type": "string", "description": "UI host，默认 127.0.0.1"},
-                "port": {"type": "integer", "description": "UI port，默认 8080"},
-                "state_file": {"type": "string", "description": "可选增量扫描状态文件"},
+                "agent": {"type": "string", "description": "Caller agent name, used to order discovered sources"},
+                "mode": {"type": "string", "description": "Capture mode, such as recall-extract or semantic-extract"},
+                "max_files": {"type": "integer", "description": "Optional scan file limit; unlimited by default"},
+                "max_minutes": {"type": "number", "description": "Optional per-source runtime limit; unlimited by default"},
+                "dry_run": {"type": "boolean", "description": "Preview only; do not write the preference store"},
+                "open_ui": {"type": "boolean", "description": "Try opening the local Manifesto UI after completion"},
+                "host": {"type": "string", "description": "UI host, defaults to 127.0.0.1"},
+                "port": {"type": "integer", "description": "UI port, defaults to 8080"},
+                "state_file": {"type": "string", "description": "Optional incremental scan state file"},
+                "install_agent_rules": {"type": "boolean", "description": "Whether to install the AGENTS.md managed block automatically; defaults to true"},
+                "agent_rules_target": {"type": "string", "description": "Optional AGENTS.md target path"},
+                "install_kimi_hooks": {"type": "boolean", "description": "Whether to install Kimi CLI lifecycle hooks automatically when agent is kimi; defaults to true"},
+                "kimi_hooks_target": {"type": "string", "description": "Optional Kimi config.toml target path"},
             },
         },
     },
     {
         "name": "get_preference_decision",
-        "description": "在 agent 回复或做事前读取用户偏好，并返回应应用的偏好指令。",
+        "description": "Read user preferences before an agent replies or acts, and return the preference instruction to apply.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task": {"type": "string", "description": "当前任务、计划动作或用户问题"},
-                "question": {"type": "string", "description": "兼容字段：agent 正准备询问用户的问题"},
-                "agent": {"type": "string", "description": "调用方 agent 名称，例如 codex/openclaw"},
-                "context": {"type": "object", "description": "项目、语言、风险、文件等上下文"},
+                "task": {"type": "string", "description": "Current task, planned action, or user question"},
+                "question": {"type": "string", "description": "Compatibility field: the question the agent is about to ask the user"},
+                "agent": {"type": "string", "description": "Caller agent name, such as codex/openclaw"},
+                "context": {"type": "object", "description": "Context such as project, language, risk, and files"},
             },
         },
     },
     {
         "name": "capture_preferences_from_session",
-        "description": "从 session 文件或目录中捕获用户偏好，并增量更新 Markdown 偏好库。source_path 省略时会自动发现 Claude/Codex/Kimi 历史并冷启动扫描。",
+        "description": "Capture user preferences from a session file or directory and incrementally update the Markdown preference store. If source_path is omitted, installed agent histories are auto-discovered for cold-start scan.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "source_path": {"type": "string", "description": "session 文件或目录路径；省略则自动发现已安装 agent 的历史"},
-                "agent": {"type": "string", "description": "调用方 agent 名称，用于冷启动扫描排序"},
-                "mode": {"type": "string", "description": "自动发现扫描时的 capture mode，例如 recall-extract"},
-                "max_files": {"type": "integer", "description": "自动发现扫描的可选上限；默认不限制"},
-                "max_minutes": {"type": "number", "description": "单个源的可选运行时长上限；默认不限制"},
-                "dry_run": {"type": "boolean", "description": "只分析不写入"},
+                "source_path": {"type": "string", "description": "Session file or directory path; omitted means auto-discover installed agent histories"},
+                "agent": {"type": "string", "description": "Caller agent name, used to order cold-start sources"},
+                "mode": {"type": "string", "description": "Capture mode for auto-discovered scan, such as recall-extract"},
+                "max_files": {"type": "integer", "description": "Optional auto-discovery scan limit; unlimited by default"},
+                "max_minutes": {"type": "number", "description": "Optional per-source runtime limit; unlimited by default"},
+                "dry_run": {"type": "boolean", "description": "Analyze only; do not write"},
             },
         },
     },
     {
         "name": "discover_agents",
-        "description": "检测本机已安装的 Claude/Codex/Kimi/Cursor/Trae，并返回可自动采集的历史文件路径。",
+        "description": "Detect installed Claude/Codex/Kimi/Cursor/Trae clients and return history paths that can be captured automatically.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "agent": {"type": "string", "description": "调用方 agent 名称，用于排序提示"},
+                "agent": {"type": "string", "description": "Caller agent name, used for ordering hints"},
             },
         },
     },
     {
         "name": "prewarm_preferences",
-        "description": "在 session 开始时预热偏好，生成 session 级偏好缓存和可执行指令。",
+        "description": "Prewarm preferences at session start and generate session-level preference cache and executable instructions.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task": {"type": "string", "description": "本 session 的任务或初始化说明"},
-                "agent": {"type": "string", "description": "调用方 agent 名称"},
-                "context": {"type": "object", "description": "项目、路径、风险、任务类型等上下文"},
-                "output_dir": {"type": "string", "description": "可选：session cache 输出目录"},
+                "task": {"type": "string", "description": "Task or initialization note for this session"},
+                "agent": {"type": "string", "description": "Caller agent name"},
+                "context": {"type": "object", "description": "Context such as project, path, risk, and task type"},
+                "output_dir": {"type": "string", "description": "Optional session cache output directory"},
             },
         },
     },
     {
         "name": "hook_session_start",
-        "description": "H1：session 开始 hook。自动执行偏好决策和 session prewarm，返回本 session 应用的偏好指令与缓存文件。",
+        "description": "H1 session-start hook. Runs preference decisioning and session prewarm, then returns preference instructions and cache files for this session.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "agent": {"type": "string", "description": "调用方 agent 名称"},
-                "session_id": {"type": "string", "description": "当前 session 标识"},
-                "task": {"type": "string", "description": "本 session 的任务或初始化说明"},
-                "context": {"type": "object", "description": "项目、路径、风险、任务类型等上下文"},
-                "output_dir": {"type": "string", "description": "可选：session cache 输出目录"},
+                "agent": {"type": "string", "description": "Caller agent name"},
+                "session_id": {"type": "string", "description": "Current session id"},
+                "task": {"type": "string", "description": "Task or initialization note for this session"},
+                "context": {"type": "object", "description": "Context such as project, path, risk, and task type"},
+                "output_dir": {"type": "string", "description": "Optional session cache output directory"},
             },
         },
     },
     {
         "name": "hook_user_message",
-        "description": "H2：用户消息 hook。每条用户消息到达时检索相关偏好，返回本轮回复前应遵守的偏好指令。",
+        "description": "H2 user-message hook. Retrieves relevant preferences whenever a user message arrives and returns instructions for this turn.",
         "inputSchema": {
             "type": "object",
             "required": ["message"],
             "properties": {
-                "message": {"type": "string", "description": "用户当前消息"},
-                "agent": {"type": "string", "description": "调用方 agent 名称"},
-                "session_id": {"type": "string", "description": "当前 session 标识"},
-                "context": {"type": "object", "description": "当前上下文"},
+                "message": {"type": "string", "description": "Current user message"},
+                "agent": {"type": "string", "description": "Caller agent name"},
+                "session_id": {"type": "string", "description": "Current session id"},
+                "context": {"type": "object", "description": "Current context"},
             },
         },
     },
     {
         "name": "hook_turn_complete",
-        "description": "H3：turn 完成 hook。条件过滤后写入 turn buffer，满 N 个 turns 后批量提取并走 merge/conflict 入库。",
+        "description": "H3 turn-complete hook. Writes qualifying turns to a buffer, then batch-extracts and merges/conflicts after N turns.",
         "inputSchema": {
             "type": "object",
             "required": ["user_message", "assistant_response"],
             "properties": {
-                "user_message": {"type": "string", "description": "本 turn 的用户消息"},
-                "assistant_response": {"type": "string", "description": "本 turn 的 agent 回复"},
-                "agent": {"type": "string", "description": "调用方 agent 名称"},
-                "session_id": {"type": "string", "description": "当前 session 标识"},
-                "context": {"type": "object", "description": "当前上下文"},
-                "dry_run": {"type": "boolean", "description": "只演练，不写入偏好库"},
+                "user_message": {"type": "string", "description": "User message for this turn"},
+                "assistant_response": {"type": "string", "description": "Agent response for this turn"},
+                "agent": {"type": "string", "description": "Caller agent name"},
+                "session_id": {"type": "string", "description": "Current session id"},
+                "context": {"type": "object", "description": "Current context"},
+                "dry_run": {"type": "boolean", "description": "Preview only; do not write the preference store"},
             },
         },
     },
     {
         "name": "hook_action_executed",
-        "description": "H4：action hook。从代码验证、格式化等行为信号生成低置信度待审偏好。",
+        "description": "H4 action hook. Creates low-confidence reviewable preferences from behavior signals such as code verification or formatting.",
         "inputSchema": {
             "type": "object",
             "required": ["action"],
             "properties": {
-                "action": {"type": "string", "description": "已执行动作，例如 run_tests_before_done"},
-                "result": {"type": "string", "description": "动作结果或摘要"},
-                "agent": {"type": "string", "description": "调用方 agent 名称"},
-                "session_id": {"type": "string", "description": "当前 session 标识"},
-                "metadata": {"type": "object", "description": "动作元数据"},
-                "dry_run": {"type": "boolean", "description": "只演练，不写入偏好库"},
+                "action": {"type": "string", "description": "Executed action, such as run_tests_before_done"},
+                "result": {"type": "string", "description": "Action result or summary"},
+                "agent": {"type": "string", "description": "Caller agent name"},
+                "session_id": {"type": "string", "description": "Current session id"},
+                "metadata": {"type": "object", "description": "Action metadata"},
+                "dry_run": {"type": "boolean", "description": "Preview only; do not write the preference store"},
             },
         },
     },
     {
         "name": "hook_session_end",
-        "description": "H5：session 结束 hook。强制 flush turn buffer，可选捕获完整 message history，并同步注入产物。",
+        "description": "H5 session-end hook. Flushes the turn buffer, optionally captures full message history, and syncs injection artifacts.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "agent": {"type": "string", "description": "调用方 agent 名称"},
-                "session_id": {"type": "string", "description": "当前 session 标识"},
+                "agent": {"type": "string", "description": "Caller agent name"},
+                "session_id": {"type": "string", "description": "Current session id"},
                 "messages": {
                     "type": "array",
                     "items": {"type": "object"},
-                    "description": "可选完整 session 消息列表，每项含 role/content",
+                    "description": "Optional full session message list; each item includes role/content",
                 },
-                "dry_run": {"type": "boolean", "description": "只演练，不写入偏好库"},
+                "dry_run": {"type": "boolean", "description": "Preview only; do not write the preference store"},
             },
         },
     },
     {
         "name": "sync_preference_injection",
-        "description": "生成静态规则、快照和本地兜底文件；可选同步到 AGENTS.md/.cursorrules 等目标文件。",
+        "description": "Generate static rules, snapshots, and local fallback files; optionally sync them to targets such as AGENTS.md or .cursorrules.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "output_dir": {"type": "string", "description": "注入产物输出目录"},
+                "output_dir": {"type": "string", "description": "Injection artifact output directory"},
                 "target_files": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "需要写入 managed block 的目标规则文件",
+                    "description": "Target rule files that should receive a managed block",
                 },
             },
         },
     },
     {
         "name": "report_preference_feedback",
-        "description": "当用户纠正、确认、拒绝或使用某个偏好时记录反馈，用于后续偏好进化。",
+        "description": "Record feedback when the user corrects, confirms, rejects, or uses a preference; used for later preference evolution.",
         "inputSchema": {
             "type": "object",
             "required": ["feedback_type", "user_feedback"],
@@ -653,84 +683,86 @@ TOOLS = [
                 "feedback_type": {
                     "type": "string",
                     "enum": ["correction", "confirmation", "usage", "rejection"],
-                    "description": "反馈类型",
+                    "description": "Feedback type",
                 },
-                "user_feedback": {"type": "string", "description": "用户原始反馈或纠正文本"},
-                "preference_id": {"type": "string", "description": "相关偏好 ID，如果知道"},
-                "preference_text": {"type": "string", "description": "相关偏好文本，如果不知道 ID"},
-                "agent": {"type": "string", "description": "调用方 agent"},
-                "task": {"type": "string", "description": "发生反馈时的任务"},
-                "context": {"type": "object", "description": "反馈上下文"},
+                "user_feedback": {"type": "string", "description": "Original user feedback or correction text"},
+                "preference_id": {"type": "string", "description": "Related preference ID, if known"},
+                "preference_text": {"type": "string", "description": "Related preference text when the ID is unknown"},
+                "agent": {"type": "string", "description": "Caller agent"},
+                "task": {"type": "string", "description": "Task during which feedback happened"},
+                "context": {"type": "object", "description": "Feedback context"},
             },
         },
     },
     {
         "name": "resolve_preference_conflict",
-        "description": "当 decide 检测到命中偏好互相冲突并询问用户后，用用户选择更新偏好状态并标记该冲突已解决。",
+        "description": "After decide detects conflicting matched preferences and the user answers, update preference state and mark the conflict resolved.",
         "inputSchema": {
             "type": "object",
             "required": ["conflict_key", "resolution"],
             "properties": {
-                "conflict_key": {"type": "string", "description": "decide 返回的 conflict.key"},
+                "conflict_key": {"type": "string", "description": "conflict.key returned by decide"},
                 "resolution": {
                     "type": "string",
                     "enum": ["prefer", "select", "neither", "exception", "custom", "correct"],
-                    "description": "prefer/select=选择一条；neither/exception=两个都不适用；custom/correct=用户给出新规则",
+                    "description": "prefer/select chooses one; neither/exception means neither applies; custom/correct records a new user rule",
                 },
-                "selected_preference_id": {"type": "string", "description": "用户选择保留的偏好 ID"},
+                "selected_preference_id": {"type": "string", "description": "Preference ID selected by the user"},
                 "conflict_ids": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "冲突偏好 ID 列表；可省略，系统会从 conflict_key 查找",
+                    "description": "Conflicting preference IDs; optional because they can be derived from conflict_key",
                 },
-                "user_feedback": {"type": "string", "description": "用户回答或自定义规则"},
-                "context": {"type": "object", "description": "本次冲突适用或例外的上下文"},
+                "user_feedback": {"type": "string", "description": "User answer or custom rule"},
+                "context": {"type": "object", "description": "Context where this conflict applies or is excepted"},
             },
         },
     },
     {
         "name": "open_preference_panel",
-        "description": "启动本地 Personal Preference Manifesto 面板，并返回 localhost 链接，供用户查看偏好、反馈和待处理项。",
+        "description": "Start the local Personal Preference Manifesto panel and return a localhost link for reviewing preferences, feedback, and pending items.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "agent": {"type": "string", "description": "调用方 agent 名称，用于空偏好库自动冷启动排序"},
-                "host": {"type": "string", "description": "默认 127.0.0.1，仅本机访问"},
-                "port": {"type": "integer", "description": "默认 8080；如端口被占用会自动后移"},
-                "open_browser": {"type": "boolean", "description": "是否尝试自动打开浏览器"},
+                "agent": {"type": "string", "description": "Caller agent name, used to order cold-start discovery when the store is empty"},
+                "host": {"type": "string", "description": "Defaults to 127.0.0.1 for local access only"},
+                "port": {"type": "integer", "description": "Defaults to 8080; auto-increments when occupied"},
+                "open_browser": {"type": "boolean", "description": "Whether to try opening the browser automatically"},
             },
         },
     },
     {
         "name": "start_fitting",
-        "description": "启动 Datailor Fitting 离线整理：按自然语言 instructions 生成 typed insights、memory rot 建议和 Fitting Report。默认 review-first，不直接覆盖偏好库。",
+        "description": "Start Datailor Fitting offline consolidation: generate typed insights, memory-rot suggestions, and a Fitting Report from natural-language instructions. Review-first by default; does not directly overwrite the preference store.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "agent": {"type": "string", "description": "调用方 agent 名称"},
-                "instructions": {"type": "string", "description": "本次关注和忽略范围，例如 focus on UI writing preferences; ignore one-off install commands"},
-                "instructions_file": {"type": "string", "description": "可选 UTF-8 instructions 文件"},
-                "source": {"type": "string", "description": "可选历史源文件或目录"},
-                "max_files": {"type": "integer", "description": "可选历史文件数上限"},
-                "dry_run": {"type": "boolean", "description": "只演练，不写 job artifacts"},
-                "fitting_dir": {"type": "string", "description": "可选 Fitting artifact 目录"},
+                "agent": {"type": "string", "description": "Caller agent name"},
+                "instructions": {"type": "string", "description": "Focus and ignore scope, such as focus on UI writing preferences; ignore one-off install commands"},
+                "instructions_file": {"type": "string", "description": "Optional UTF-8 instructions file"},
+                "source": {"type": "string", "description": "Optional history source file or directory"},
+                "max_files": {"type": "integer", "description": "Optional history file limit"},
+                "dry_run": {"type": "boolean", "description": "Preview only; do not write job artifacts"},
+                "mode": {"type": "string", "enum": ["auto", "curate"], "description": "Optional Fitting mode; auto applies high-confidence preferences automatically"},
+                "auto_apply": {"type": "boolean", "description": "Whether to auto-apply high-confidence preferences; mode=auto takes precedence"},
+                "fitting_dir": {"type": "string", "description": "Optional Fitting artifact directory"},
             },
         },
     },
     {
         "name": "get_fitting_status",
-        "description": "查看 Datailor Fitting job 状态；不传 job_id 时返回最新 job。",
+        "description": "Read Datailor Fitting job status; returns the latest job when job_id is omitted.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "job_id": {"type": "string", "description": "Fitting job id"},
-                "fitting_dir": {"type": "string", "description": "可选 Fitting artifact 目录"},
+                "fitting_dir": {"type": "string", "description": "Optional Fitting artifact directory"},
             },
         },
     },
     {
         "name": "apply_fitting_plan",
-        "description": "应用用户明确接受的 Fitting 变更。不会默认 accept all；必须传 accepted_change_ids。",
+        "description": "Apply explicitly accepted Fitting changes. Does not accept all by default; accepted_change_ids is required.",
         "inputSchema": {
             "type": "object",
             "required": ["job_id", "accepted_change_ids"],
@@ -739,9 +771,9 @@ TOOLS = [
                 "accepted_change_ids": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "明确接受的 change id 列表",
+                    "description": "Explicitly accepted change id list",
                 },
-                "fitting_dir": {"type": "string", "description": "可选 Fitting artifact 目录"},
+                "fitting_dir": {"type": "string", "description": "Optional Fitting artifact directory"},
             },
         },
     },

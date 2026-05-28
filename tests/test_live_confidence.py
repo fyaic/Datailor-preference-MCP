@@ -14,14 +14,14 @@ NOW = datetime(2026, 5, 26, tzinfo=timezone.utc)
 class LiveConfidenceTests(unittest.TestCase):
     def test_evidence_recency_and_relevance_factors_are_exposed(self) -> None:
         record = PreferenceRecord(
-            title="代码验证",
-            applies_to="当 agent 修改代码后",
-            preference="代码改动完成后默认运行相关测试。",
+            title="Code verification",
+            applies_to="After the agent changes code",
+            preference="After code changes, run relevant tests by default.",
             confidence="high",
             updated_at="2026-05-20T00:00:00+00:00",
             evidence=[
-                Evidence(source="ui_feedback", quote="确认", source_type="user_confirm"),
-                Evidence(source="session", quote="以后默认测试", source_type="user_explicit"),
+                Evidence(source="ui_feedback", quote="confirmed", source_type="user_confirm"),
+                Evidence(source="session", quote="run tests by default from now on", source_type="user_explicit"),
                 Evidence(source="behavior:test", quote="pytest passed", role="system", source_type="action_signal"),
             ],
         )
@@ -36,9 +36,9 @@ class LiveConfidenceTests(unittest.TestCase):
 
     def test_stale_preference_is_softly_downgraded(self) -> None:
         record = PreferenceRecord(
-            title="旧回复偏好",
-            applies_to="当 agent 回复用户问题时",
-            preference="回复用户问题时要详细展开。",
+            title="Old reply preference",
+            applies_to="When replying to user questions",
+            preference="Use detailed explanations when replying to user questions.",
             confidence="high",
             updated_at="2025-01-01T00:00:00+00:00",
         )
@@ -51,12 +51,12 @@ class LiveConfidenceTests(unittest.TestCase):
 
     def test_needs_review_conflict_does_not_reach_injection_threshold(self) -> None:
         record = PreferenceRecord(
-            title="摇摆回复偏好",
-            applies_to="当 agent 回复用户问题时",
-            preference="回复用户问题时要详细展开。",
+            title="Unstable reply preference",
+            applies_to="When replying to user questions",
+            preference="Use detailed explanations when replying to user questions.",
             confidence="high",
             status="needs_review",
-            conflict_notes=["与简洁回复偏好冲突"],
+            conflict_notes=["Conflicts with the concise reply preference"],
         )
 
         live = live_confidence(record, relevance_score=0.36, now=NOW)
@@ -67,22 +67,22 @@ class LiveConfidenceTests(unittest.TestCase):
 
     def test_decide_ranks_recent_live_confidence_above_stale_static_high(self) -> None:
         old_detailed = PreferenceRecord(
-            title="旧回复语气",
-            applies_to="当 agent 回复用户问题时",
-            preference="回复用户问题时，使用正式语气。",
+            title="Old reply tone",
+            applies_to="When replying to user questions",
+            preference="Use a formal tone when replying to user questions.",
             confidence="high",
             updated_at="2025-01-01T00:00:00+00:00",
         )
         recent_brief = PreferenceRecord(
-            title="近期结论优先",
-            applies_to="当 agent 回复用户问题时",
-            preference="回复用户问题时，先给结论。",
+            title="Recent conclusion first",
+            applies_to="When replying to user questions",
+            preference="Give the conclusion first when replying to user questions.",
             confidence="medium",
             updated_at="2026-05-26T00:00:00+00:00",
         )
 
         decision = HeuristicBackend().decide(
-            task="请回复用户问题，说明怎么处理。",
+            task="Please answer the user question and explain what to do.",
             context={},
             records=[old_detailed, recent_brief],
             agent="codex",
@@ -95,20 +95,20 @@ class LiveConfidenceTests(unittest.TestCase):
 
     def test_decide_escalates_before_combining_conflicting_top_matches(self) -> None:
         detailed = PreferenceRecord(
-            title="详细回复",
-            applies_to="当 agent 回复用户问题时",
-            preference="回复用户问题时，回答要详细展开，充分解释。",
+            title="Detailed replies",
+            applies_to="When replying to user questions",
+            preference="When replying to user questions, answer with detailed full explanations.",
             confidence="high",
         )
         concise = PreferenceRecord(
-            title="简洁回复",
-            applies_to="当 agent 回复用户问题时",
-            preference="回复用户问题时，回答要简洁短一点，不要长文。",
+            title="Concise replies",
+            applies_to="When replying to user questions",
+            preference="When replying to user questions, keep answers concise and short; avoid long-form explanations.",
             confidence="high",
         )
 
         decision = HeuristicBackend().decide(
-            task="请回复用户问题，说明怎么处理。",
+            task="Please answer the user question and explain what to do.",
             context={},
             records=[detailed, concise],
             agent="codex",
@@ -117,25 +117,25 @@ class LiveConfidenceTests(unittest.TestCase):
         self.assertEqual(decision["decision"], "escalate")
         self.assertTrue(decision["clarification_required"])
         self.assertIn("conflict", decision)
-        self.assertNotIn("详细展开；回复用户问题时，回答要简洁", decision["agent_instruction"])
+        self.assertNotIn("detailed full explanations; When replying to user questions, keep answers concise", decision["agent_instruction"])
 
     def test_needs_review_with_strong_evidence_is_not_injected(self) -> None:
         record = PreferenceRecord(
-            title="待审详细回复",
-            applies_to="当 agent 回复用户问题时",
-            preference="回复用户问题时，回答要详细展开，充分解释。",
+            title="Needs-review detailed replies",
+            applies_to="When replying to user questions",
+            preference="When replying to user questions, answer with detailed full explanations.",
             confidence="high",
             status="needs_review",
-            conflict_notes=["与简洁回复偏好冲突"],
+            conflict_notes=["Conflicts with the concise reply preference"],
             evidence=[
-                Evidence(source="session-1", quote="详细", source_type="user_explicit"),
-                Evidence(source="session-2", quote="展开", source_type="user_explicit"),
-                Evidence(source="ui_feedback", quote="确认过但后来冲突", source_type="user_confirm"),
+                Evidence(source="session-1", quote="detailed", source_type="user_explicit"),
+                Evidence(source="session-2", quote="expand", source_type="user_explicit"),
+                Evidence(source="ui_feedback", quote="confirmed but later conflicted", source_type="user_confirm"),
             ],
         )
 
         decision = HeuristicBackend().decide(
-            task="请回复用户问题，说明怎么处理。",
+            task="Please answer the user question and explain what to do.",
             context={},
             records=[record],
             agent="codex",
@@ -145,19 +145,19 @@ class LiveConfidenceTests(unittest.TestCase):
 
     def test_unrelated_high_confidence_preference_is_not_injected(self) -> None:
         record = PreferenceRecord(
-            title="代码测试",
-            applies_to="当 agent 修改代码后",
-            preference="代码改动完成后默认运行相关测试。",
+            title="Code tests",
+            applies_to="After the agent changes code",
+            preference="After code changes, run relevant tests by default.",
             confidence="high",
             evidence=[
-                Evidence(source="ui_feedback", quote="确认", source_type="user_confirm"),
-                Evidence(source="session", quote="以后默认测试", source_type="user_explicit"),
-                Evidence(source="session", quote="每次都测", source_type="user_explicit"),
+                Evidence(source="ui_feedback", quote="confirmed", source_type="user_confirm"),
+                Evidence(source="session", quote="test by default from now on", source_type="user_explicit"),
+                Evidence(source="session", quote="test every time", source_type="user_explicit"),
             ],
         )
 
         decision = HeuristicBackend().decide(
-            task="帮我写一份产品需求文档。",
+            task="Help me write a product requirements document.",
             context={},
             records=[record],
             agent="codex",

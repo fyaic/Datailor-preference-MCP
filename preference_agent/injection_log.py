@@ -118,4 +118,4 @@ def _session_id(context: dict[str, Any]) -> str:
 
 def _clean(text: str, limit: int = 500) -> str:
     cleaned = redact_sensitive(" ".join(str(text or "").split()).strip())
-    return cleaned if len(cleaned) <= limit else cleaned[: limit - 1] + "…"
+    return cleaned if len(cleaned) <= limit else cleaned[: max(0, limit - 3)] + "..."

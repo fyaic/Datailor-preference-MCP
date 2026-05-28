@@ -1,8 +1,7 @@
-Assistant: 代码改完了，要不要跑测试？
+Assistant: The code is changed. Should I run tests?
 
-User: 跑测试，覆盖率低于 80% 就重写。以后代码改动后默认要做验证，不要只改代码就结束。
+User: Run tests, and rewrite if coverage is below 80%. From now on, code changes should include verification by default; do not stop after only editing code.
 
-Assistant: 要不要做 review？
+Assistant: Should I do a review?
 
-User: 要，重点看边界情况、异常路径和回归风险。
-
+User: Yes. Focus on edge cases, exception paths, and regression risk.

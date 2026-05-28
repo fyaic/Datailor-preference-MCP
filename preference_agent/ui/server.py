@@ -16,6 +16,9 @@ from urllib.parse import urlparse
 from ..backends import semantic_similarity
 from ..executive_summary import read_executive_summary
 from ..feedback import feedback_report, record_feedback
+from ..fitting import apply_fitting_plan, latest_fitting, reject_fitting_plan
+from ..fitting_trigger import default_mode_settings, mark_fitting_reviewed, normalize_mode, read_mode_settings, write_mode_settings
+from ..injection import sync_injection_artifacts
 from ..injection_log import default_injection_log, injection_log_summary, read_injection_log
 from ..live_confidence import live_confidence
 from ..models import PreferenceRecord, now_iso
@@ -25,12 +28,10 @@ from ..paths import default_ui_dir as default_user_ui_dir
 from ..preference_actions import apply_preference_feedback
 from ..privacy import redact_sensitive
 from ..store import MarkdownPreferenceStore
-from ..fitting import latest_fitting
-
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-DEFAULT_SETTINGS = {"mode": "auto", "theme": "light", "language": "en"}
-VALID_MODES = {"auto", "autonomous", "curated"}
+DEFAULT_SETTINGS = default_mode_settings()
+VALID_MODES = {"auto", "curate"}
 VALID_THEMES = {"light", "dark"}
 VALID_LANGUAGES = {"en", "zh"}
 
@@ -109,6 +110,11 @@ def build_manifesto(
     attention = [item for item in preferences if item["attention"]]
     conflict_groups = _build_conflict_groups(records, preferences)
     mode = _effective_mode(settings, events)
+    fitting_state = settings.get("fitting") if isinstance(settings.get("fitting"), dict) else {}
+    fitting_view = _latest_fitting_view()
+    if fitting_view and fitting_state.get("pending_plan_job_id") != fitting_view.get("job_id"):
+        fitting_view["pending_changes"] = 0
+        fitting_view["review_state"] = "reviewed"
 
     return {
         "generated_at": now_iso(),
@@ -117,6 +123,7 @@ def build_manifesto(
         "configured_mode": settings["mode"],
         "theme": settings["theme"],
         "language": settings["language"],
+        "fitting_state": fitting_state,
         "summary": {
             "active": len(active),
             "pending": len(pending),
@@ -140,7 +147,7 @@ def build_manifesto(
             "summary": injection_log_summary(injection_events),
             "items": injection_events,
         },
-        "fitting": _latest_fitting_view(),
+        "fitting": fitting_view,
     }
 
 
@@ -276,6 +283,9 @@ def _make_handler(config: UiConfig) -> type[BaseHTTPRequestHandler]:
             if path == "/static/app.js":
                 self._serve_static("app.js", "application/javascript; charset=utf-8")
                 return
+            if path in {"/favicon.png", "/static/favicon.png"}:
+                self._serve_static("favicon.png", "image/png")
+                return
             if path == "/api/manifesto":
                 _append_event(config.event_log, "panel_open")
                 payload = build_manifesto(
@@ -338,7 +348,39 @@ def _make_handler(config: UiConfig) -> type[BaseHTTPRequestHandler]:
                     _append_event(config.event_log, event_type, body.get("metadata") if isinstance(body.get("metadata"), dict) else {})
                     self._json(HTTPStatus.OK, {"ok": True})
                     return
+                if path == "/api/fitting/apply":
+                    job_id = str(body.get("job_id") or "").strip()
+                    accepted = body.get("accepted_change_ids") if isinstance(body.get("accepted_change_ids"), list) else []
+                    result = apply_fitting_plan(
+                        job_id=job_id,
+                        accepted_change_ids=[str(item) for item in accepted],
+                        store_path=config.store_path,
+                    )
+                    if result.get("ok"):
+                        rejected = reject_fitting_plan(job_id)
+                        result["rejected"] = rejected.get("rejected", [])
+                        result["remaining_pending"] = rejected.get("remaining_pending", result.get("remaining_pending", 0))
+                        result["pending_change_ids"] = rejected.get("pending_change_ids", [])
+                        mark_fitting_reviewed(job_id, path=config.settings_path, accepted=len(result.get("applied") or []))
+                        sync_injection_artifacts(config.store_path)
+                        _append_event(
+                            config.event_log,
+                            "manual_action",
+                            {"action": "fitting_apply", "job_id": job_id, "accepted_change_ids": accepted},
+                        )
+                    self._json(HTTPStatus.OK, result)
+                    return
+                if path == "/api/fitting/reject":
+                    job_id = str(body.get("job_id") or "").strip()
+                    result = reject_fitting_plan(job_id)
+                    settings = mark_fitting_reviewed(job_id, path=config.settings_path, rejected=True)
+                    _append_event(config.event_log, "manual_action", {"action": "fitting_reject", "job_id": job_id})
+                    self._json(HTTPStatus.OK, {"ok": True, "settings": settings, "result": result})
+                    return
                 self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
+            except ValueError as exc:
+                status = HTTPStatus.NOT_FOUND if str(exc).startswith("job not found:") else HTTPStatus.BAD_REQUEST
+                self._json(status, {"ok": False, "error": str(exc)})
             except Exception as exc:
                 self._json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
 
@@ -438,6 +480,18 @@ def _latest_fitting_view() -> dict[str, Any] | None:
             view["report_available"] = True
         except OSError as exc:
             view["report_error"] = str(exc)
+    plan_file = Path(str(view.get("job_dir") or "")) / "apply-plan.json"
+    if plan_file.exists() and plan_file.is_file():
+        try:
+            view["apply_plan"] = json.loads(plan_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            view["apply_plan_error"] = str(exc)
+    plan = view.get("apply_plan") if isinstance(view.get("apply_plan"), dict) else {}
+    changes = plan.get("changes") if isinstance(plan.get("changes"), list) else []
+    pending = [item for item in changes if isinstance(item, dict) and item.get("status", "pending") == "pending"]
+    view["changes"] = changes
+    view["pending_changes"] = len(pending) if view.get("status") == "pending_review" else 0
+    view["review_state"] = "pending" if view["pending_changes"] else "none"
     return view
 
 
@@ -556,23 +610,23 @@ def _same_explicit_scope(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 def _shared_topic(left: str, right: str) -> bool:
     topics = (
-        ("reply", "response", "回答", "回复", "回话", "输出"),
-        ("test", "verify", "verification", "测试", "验证", "验收"),
-        ("review", "code review", "审查", "评审"),
+        ("reply", "response", "answer", "output"),
+        ("test", "verify", "verification", "acceptance"),
+        ("review", "code review", "audit"),
         ("linear", "issue"),
-        ("markdown", "document", "文档", "沉淀"),
-        ("local", "offline", "本地", "离线"),
-        ("confirm", "ask", "确认", "询问", "反问"),
+        ("markdown", "document", "notes"),
+        ("local", "offline"),
+        ("confirm", "ask", "clarify"),
     )
     return any(_has_any_term(left, topic) and _has_any_term(right, topic) for topic in topics)
 
 
 def _has_opposition(left: str, right: str) -> bool:
     opposed = (
-        (("concise", "brief", "short", "简洁", "简短", "少废话"), ("detail", "detailed", "exhaustive", "完整", "详细", "展开", "长文")),
-        (("ask", "confirm", "manual", "询问", "确认", "手动"), ("automatic", "auto", "自动", "不问", "不要问", "无需确认", "无需询问", "直接推进")),
-        (("local", "offline", "本地", "离线"), ("cloud", "api", "云模型", "云端")),
-        (("commit", "push", "提交", "推送"), ("do not commit", "no push", "不提交", "不推送")),
+        (("concise", "brief", "short", "less verbose"), ("detail", "detailed", "exhaustive", "complete", "long-form")),
+        (("ask", "confirm", "manual"), ("automatic", "auto", "do not ask", "no confirmation", "directly proceed")),
+        (("local", "offline"), ("cloud", "api", "remote model")),
+        (("commit", "push"), ("do not commit", "no push")),
     )
     for first, second in opposed:
         if (_has_any_term(left, first) and _has_any_term(right, second)) or (
@@ -611,25 +665,14 @@ def _meaningful_text(text: str) -> str:
         "use",
         "avoid",
         "provide",
-        "用户",
-        "偏好",
-        "当",
-        "时",
-        "需要",
-        "优先",
-        "默认",
-        "进行",
-        "内容",
-        "输出",
-        "任务",
-        "使用",
-        "避免",
-        "确保",
-        "提供",
-        "相关",
-        "当前",
-        "候选",
-        "已生效",
+        "ensure",
+        "content",
+        "output",
+        "task",
+        "related",
+        "current",
+        "candidate",
+        "active",
     )
     for term in generic_terms:
         normalized = normalized.replace(term, "")
@@ -706,17 +749,8 @@ def _latest_update(preferences: list[dict[str, Any]]) -> str:
     return max(str(item.get("updated_at") or "") for item in preferences)
 
 
-def _read_settings(path: Path) -> dict[str, str]:
-    settings = dict(DEFAULT_SETTINGS)
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                settings.update({key: str(value) for key, value in data.items()})
-        except json.JSONDecodeError:
-            pass
-    if settings.get("mode") not in VALID_MODES:
-        settings["mode"] = "auto"
+def _read_settings(path: Path) -> dict[str, Any]:
+    settings = read_mode_settings(path)
     if settings.get("theme") not in VALID_THEMES:
         settings["theme"] = "light"
     if settings.get("language") not in VALID_LANGUAGES:
@@ -724,28 +758,21 @@ def _read_settings(path: Path) -> dict[str, str]:
     return settings
 
 
-def _update_settings(path: Path, patch: dict[str, Any]) -> dict[str, str]:
+def _update_settings(path: Path, patch: dict[str, Any]) -> dict[str, Any]:
     settings = _read_settings(path)
-    if "mode" in patch and str(patch["mode"]) in VALID_MODES:
-        settings["mode"] = str(patch["mode"])
+    if "mode" in patch:
+        settings["mode"] = normalize_mode(patch["mode"])
     if "theme" in patch and str(patch["theme"]) in VALID_THEMES:
         settings["theme"] = str(patch["theme"])
     if "language" in patch and str(patch["language"]) in VALID_LANGUAGES:
         settings["language"] = str(patch["language"])
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
-    return settings
+    return write_mode_settings(settings, path)
 
 
-def _effective_mode(settings: dict[str, str], events: list[dict[str, Any]]) -> str:
-    configured = settings.get("mode", "auto")
-    if configured in {"autonomous", "curated"}:
-        return configured
-    if any(item.get("event_type") in {"review_click", "manual_action"} for item in events):
-        return "curated"
-    if sum(1 for item in events if item.get("event_type") == "panel_open") <= 1:
-        return "autonomous"
-    return "curated"
+def _effective_mode(settings: dict[str, Any], _events: list[dict[str, Any]] | None = None) -> str:
+    """V1: explicit user choice only; default to conservative curate mode."""
+    configured = settings.get("mode", "curate")
+    return configured if configured in VALID_MODES else "curate"
 
 
 def _append_event(path: Path, event_type: str, metadata: dict[str, Any] | None = None) -> None:

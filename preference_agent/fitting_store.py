@@ -41,6 +41,9 @@ class FittingJobStore:
             apply_plan_file=job_dir / "apply-plan.json",
         )
 
+    def paths_for_job(self, job_id: str) -> FittingJobPaths:
+        return self.new_job_paths(job_id=job_id)
+
     def ensure_job_dir(self, paths: FittingJobPaths) -> None:
         paths.job_dir.mkdir(parents=True, exist_ok=True)
 
@@ -69,11 +72,15 @@ class FittingJobStore:
 
     def read_result(self, job_id: str) -> FittingJobResult:
         path = self.jobs_dir / job_id / "result.json"
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"job not found: {job_id}")
         data = json.loads(path.read_text(encoding="utf-8"))
         return FittingJobResult.from_dict(data)
 
     def read_apply_plan(self, job_id: str) -> ApplyPlan:
         path = self.jobs_dir / job_id / "apply-plan.json"
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"job not found: {job_id}")
         data = json.loads(path.read_text(encoding="utf-8"))
         return ApplyPlan.from_dict(data)
 
@@ -106,7 +113,7 @@ class FittingJobStore:
     def latest_result(self) -> FittingJobResult | None:
         for item in self.list_jobs(limit=1):
             result_file = Path(str(item.get("result_file") or ""))
-            if result_file.exists():
+            if result_file.exists() and result_file.is_file():
                 return FittingJobResult.from_dict(json.loads(result_file.read_text(encoding="utf-8")))
         return None
 

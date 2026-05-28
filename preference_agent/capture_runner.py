@@ -23,31 +23,28 @@ from .store import MarkdownPreferenceStore
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build"}
 AGENT_RULE_NAMES = {"AGENTS.md", "agents.md", "CLAUDE.md", "claude.md"}
 AGENT_RULE_SUFFIXES = {".md", ".yaml", ".yml"}
-USER_ROLES = {"user", "human", "用户", "我"}
-IGNORED_ROLES = {"assistant", "model", "ai", "tool", "system", "助手", "系统", "kimi", "codex", "openclaw"}
+USER_ROLES = {"user", "human", "me"}
+IGNORED_ROLES = {"assistant", "model", "ai", "tool", "system", "kimi", "codex", "openclaw"}
 RECALL_MARKERS = (
-    "以后",
-    "默认",
-    "每次",
-    "总是",
-    "我希望",
-    "我偏好",
-    "我倾向",
-    "我喜欢",
-    "我不喜欢",
-    "不要",
-    "别",
-    "禁止",
-    "必须",
-    "一定要",
-    "不对",
-    "不是这个意思",
-    "你应该",
-    "下次",
-    "回读",
-    "沉淀",
-    "从现在开始",
-    "以后默认",
+    "from now on",
+    "default",
+    "every time",
+    "always",
+    "I want",
+    "I prefer",
+    "I tend to",
+    "I like",
+    "I dislike",
+    "do not",
+    "don't",
+    "forbid",
+    "must",
+    "wrong",
+    "not what I meant",
+    "you should",
+    "next time",
+    "read back",
+    "save as documentation",
 )
 
 
@@ -394,7 +391,7 @@ class CaptureRunner:
                     source_type="agent_rule",
                     scope=scope,
                     preference=block,
-                    applies_to=f"当 agent 在 {scope} 范围内回复或执行任务时",
+                    applies_to=f"When the agent replies or executes tasks within the {scope} scope",
                     evidence_quote=block,
                     confidence="high",
                 )
@@ -763,7 +760,7 @@ def _normalize_role(role: str) -> str:
     if lowered in USER_ROLES:
         return "user"
     if lowered in IGNORED_ROLES:
-        return "assistant" if lowered in {"assistant", "model", "ai", "助手", "kimi", "codex", "openclaw"} else "ignored"
+        return "assistant" if lowered in {"assistant", "model", "ai", "kimi", "codex", "openclaw"} else "ignored"
     return "user" if "user" in lowered or "human" in lowered else "ignored"
 
 
@@ -779,7 +776,7 @@ def _candidate_from_user_message(source: str, content: str, context_hint: str = 
         source_type="user_message",
         scope="global",
         preference=_truncate(content, 1000),
-        applies_to="从用户历史输入召回的候选偏好，需模型精提或人工抽检后合并",
+        applies_to="Candidate preference recalled from user history; merge only after model extraction or manual review",
         evidence_quote=_truncate(content, 1000),
         confidence="low",
         context_hint=context_hint,
@@ -806,15 +803,16 @@ def _capture_candidate_from_recall(candidate: RecallCandidate) -> CaptureCandida
 def _context_hint(content: str, previous_assistant: str) -> str:
     if not previous_assistant:
         return ""
-    markers = ("按你刚才", "这个不对", "不是这个意思", "要", "不要", "可以")
-    if any(marker in content for marker in markers) and len(content) <= 80:
+    markers = ("as you said", "that is wrong", "not what I meant", "do", "do not", "can")
+    lowered = content.casefold()
+    if any(marker in lowered for marker in markers) and len(content) <= 80:
         return previous_assistant
     return ""
 
 
 def _truncate(text: str, limit: int) -> str:
     text = " ".join(text.split())
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 def session_from_candidates(candidates: list[CaptureCandidate], source: str) -> Session:

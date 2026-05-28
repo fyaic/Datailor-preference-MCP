@@ -55,24 +55,23 @@ class HeuristicBackend(PreferenceModelBackend):
     """
 
     preference_markers = (
-        "以后",
-        "默认",
-        "每次",
-        "总是",
-        "必须",
-        "不要",
-        "不用问",
-        "别问",
-        "我偏好",
-        "我希望",
-        "我要求",
-        "你应该",
-        "优先",
-        "倾向",
-        "回读",
+        "from now on",
+        "default",
+        "every time",
+        "always",
+        "must",
+        "do not",
+        "do not ask",
+        "i prefer",
+        "i want",
+        "i require",
+        "you should",
+        "prioritize",
+        "prefer",
+        "read back",
     )
-    confirmation_markers = ("要不要", "是否", "需不需要", "要不", "可以吗", "确认", "?")
-    change_markers = ("以后", "从现在开始", "改成", "默认改为", "以后默认")
+    confirmation_markers = ("should we", "whether", "do you need", "would you like", "okay?", "confirm", "?")
+    change_markers = ("from now on", "change to", "default to")
 
     def extract_preferences(self, session: Session) -> list[PreferenceRecord]:
         candidates: list[PreferenceRecord] = []
@@ -89,11 +88,11 @@ class HeuristicBackend(PreferenceModelBackend):
                         continue
                     candidates.append(
                         _record(
-                            title=f"用户偏好：{_short(generalized, 32)}",
+                            title=f"User preference: {_short(generalized, 32)}",
                             applies_to=_infer_applies_to(generalized),
                             preference=generalized,
                             triggers=[content],
-                            exceptions=["上下文明显变化、风险升高或近期回答不一致时升级给真人确认"],
+                            exceptions=["Escalate to the user when context changes materially, risk increases, or recent answers disagree."],
                             source=session.source,
                             quote=next_user.content,
                             confidence="medium",
@@ -107,7 +106,7 @@ class HeuristicBackend(PreferenceModelBackend):
                     if generalized and len(generalized) >= 8:
                         candidates.append(
                             _record(
-                                title=f"用户偏好：{_short(generalized, 32)}",
+                                title=f"User preference: {_short(generalized, 32)}",
                                 applies_to=_infer_applies_to(generalized),
                                 preference=generalized,
                                 triggers=_infer_triggers(generalized),
@@ -137,7 +136,7 @@ class HeuristicBackend(PreferenceModelBackend):
                 best = (score, record)
         score, record = best
         if not record or score < 0.27:
-            return {"action": "new", "reason": "没有足够相似的既有偏好", "score": round(score, 3)}
+            return {"action": "new", "reason": "No sufficiently similar existing preference.", "score": round(score, 3)}
         preference_score = semantic_similarity(candidate.preference, record.preference)
         if candidate.preference in record.preference or record.preference in candidate.preference:
             preference_score = max(preference_score, 0.6)
@@ -145,20 +144,20 @@ class HeuristicBackend(PreferenceModelBackend):
             return {
                 "action": "replace",
                 "target_id": record.id,
-                "reason": "候选偏好包含明确变化信号，按持续更新处理",
+                "reason": "Candidate contains an explicit change signal; treat it as an update.",
                 "score": round(score, 3),
             }
         if preference_score >= 0.55:
             return {
                 "action": "merge",
                 "target_id": record.id,
-                "reason": "同一意图下的新证据强化既有偏好",
+                "reason": "New evidence reinforces an existing preference with the same intent.",
                 "score": round(score, 3),
             }
         return {
             "action": "conflict",
             "target_id": record.id,
-            "reason": "语境相近但回答不一致，需要保留冲突证据",
+            "reason": "Context is similar but behavior differs; keep conflict evidence.",
             "score": round(score, 3),
         }
 
@@ -198,14 +197,14 @@ class HeuristicBackend(PreferenceModelBackend):
         conflict_group = _find_conflicts_among([record for _score, _relevance, _live, record in scored[:3]])
         if conflict_group:
             return _backend_conflict_response(agent=agent, matches=matches, conflicts=conflict_group)
-        combined = "；".join(match["instruction"] for match in matches[:3])
+        combined = "; ".join(match["instruction"] for match in matches[:3])
         return {
             "decision": "apply",
             "agent": agent,
             "matched_preferences": matches,
-            "agent_instruction": f"在回复或执行前应用这些用户偏好：{combined}",
+            "agent_instruction": f"Apply these user preferences before replying or acting: {combined}",
             "escalate": False,
-            "reason": "找到语义相关的用户偏好",
+            "reason": "Found semantically relevant user preferences.",
         }
 
 
@@ -329,51 +328,51 @@ class OpenAICompatibleBackend(PreferenceModelBackend):
         return _json_from_text(content)
 
 
-EXTRACT_SYSTEM_PROMPT = """你是个人偏好精提器。请从召回候选中提取稳定、可复用、对未来 agent 行为有指导价值的用户偏好。
-只提取和 agent 行为、回复方式、执行习惯、验证标准、升级条件、工具选择、语言风格、信息组织有关的偏好。
-严禁把一次性业务任务、项目事实、路径/URL/issue 编号、临时指令、调试请求、让 agent 当前去做的事情提取为偏好。
-如果一条候选只是“帮我改/查/录/创建/推/测试某个具体项目或 issue”，输出空数组。
-如果候选能反映偏好，必须把它改写成可复用规则，不要照抄用户原文。
-`applies_to` 必须是具体场景，禁止使用“当 agent 准备回复、执行任务或做确认决策时”这种对所有场景都成立的假条件。
-`preference` 必须是可执行的短句，不能包含本地路径、URL、AIC/issue 编号、分支名、具体文件名、一次性对象名。
-输出 JSON 对象：{"preferences": [...]}。
-每个 preference 字段：
-- title: 简短标题。
-- summary: 一句话概括。
-- applies_to: 适用场景，尽量写成“当...时”。
-- preference: 可直接给 agent 执行的偏好陈述，第三人称或祈使句均可，但要简洁。
-- triggers[]: 触发该偏好的意图或场景。
-- exceptions[]: 不适用或需要升级确认的情况。
-- confidence: high/medium/low。
-- evidence[]: 每条必须包含 source, quote, role。
-可额外输出 category、is_negation、quality 等字段，但不要编造证据。
-否定表达要保留语义，例如“不要长文”可以提炼为“偏好简洁回复”，证据 quote 仍保留原文。
-高置信只给明确出现“以后、默认、每次、总是、我希望、我偏好、我说过、记住”等稳定信号，或多条候选反复表达的习惯。
+EXTRACT_SYSTEM_PROMPT = """You are a personal preference extraction engine. Extract stable, reusable user preferences that can guide future agent behavior from recalled candidates.
+Only extract preferences related to agent behavior, response style, execution habits, verification standards, escalation conditions, tool choice, language style, or information organization.
+Never extract one-off business tasks, project facts, paths, URLs, issue IDs, temporary instructions, debugging requests, or tasks the agent should do right now as preferences.
+If a candidate only asks the agent to edit, check, create, push, test, or inspect a specific project or issue, return an empty array.
+If a candidate reflects a preference, rewrite it as a reusable rule instead of copying the user verbatim.
+`applies_to` must be a specific scenario. Do not use generic fake scopes such as "when the agent is about to reply, execute a task, or make a decision".
+`preference` must be a short executable instruction. It must not contain local paths, URLs, AIC/issue IDs, branch names, specific file names, or one-off object names.
+Output a JSON object: {"preferences": [...]}.
+Each preference field:
+- title: short title.
+- summary: one-sentence summary.
+- applies_to: specific scenario, preferably starting with "When ...".
+- preference: executable preference statement for the agent; concise imperative or third-person wording is fine.
+- triggers[]: intents or scenarios that trigger this preference.
+- exceptions[]: cases where it does not apply or needs escalation.
+- confidence: high/medium/low.
+- evidence[]: each item must include source, quote, role.
+Optional fields such as category, is_negation, or quality are allowed, but do not invent evidence.
+Preserve negative meaning. For example, "do not write long answers" can become "Prefer concise replies", while evidence.quote keeps the original text.
+Use high confidence only for explicit stable signals such as "from now on", "default", "every time", "always", "I want", "I prefer", "I said before", "remember", or repeated habits across multiple candidates.
 """
 
-MERGE_SYSTEM_PROMPT = """你是偏好库合并器。判断 candidate 与 existing 是否是同一个用户偏好意图。
-输出 JSON：{"action":"new|merge|replace|conflict","target_id":null或id,"reason":"..."}。
-规则：
-- new: 没有同类偏好。
-- merge: 同类且一致，追加证据。
-- replace: 明确体现用户偏好发生变化，应更新主偏好。
-- conflict: 同类但不确定是否变化，应保留冲突证据，不自动覆盖。
+MERGE_SYSTEM_PROMPT = """You are a preference-store merger. Decide whether candidate and existing preferences express the same user-preference intent.
+Output JSON: {"action":"new|merge|replace|conflict","target_id":null or id,"reason":"..."}.
+Rules:
+- new: no similar preference exists.
+- merge: same intent and consistent; append evidence.
+- replace: clear preference change; update the primary preference.
+- conflict: same intent but uncertain change; keep conflict evidence and do not overwrite automatically.
 """
 
-DECIDE_SYSTEM_PROMPT = """你是偏好代言决策器。给定 agent 当前任务和偏好库，判断回复或做事前应应用哪些偏好。
-语义和意图优先，不要求字面一致。
-输入偏好已包含 live_confidence：这是当前任务下由基础置信度、证据、时间、一致性和场景相关性计算出的动态置信度。
-优先使用 live_confidence.score 高、且确实适合当前任务的偏好；不要因为 stored confidence 高就强行应用低相关偏好。
-status 不是 active 的偏好不能直接注入；如果它与当前任务强相关，只能用于解释不确定性或触发澄清。
-输出 JSON：
+DECIDE_SYSTEM_PROMPT = """You are a preference-decision engine. Given the agent's current task and preference store, decide which preferences should apply before replying or acting.
+Prioritize semantic intent over exact wording.
+Input preferences include live_confidence, a dynamic score based on base confidence, evidence, recency, consistency, and task relevance.
+Prefer preferences with high live_confidence.score that genuinely fit the current task. Do not force low-relevance preferences just because stored confidence is high.
+Preferences whose status is not active must not be injected directly; if strongly relevant, use them only to explain uncertainty or trigger clarification.
+Output JSON:
 {
   "decision": "apply|no_preference|escalate",
   "matched_preferences": [{"id":"...","title":"...","confidence":"high|medium|low","instruction":"...","reason":"..."}],
-  "agent_instruction": "给 agent 的可执行指令",
+  "agent_instruction": "executable instruction for the agent",
   "escalate": false,
   "reason": "..."
 }
-只有在偏好确实适用时 apply；不确定就 no_preference 或 escalate。
+Return apply only when preferences truly fit; otherwise return no_preference or escalate.
 """
 
 
@@ -415,18 +414,14 @@ def semantic_similarity(left: str, right: str) -> float:
 def _normalize_for_similarity(text: str) -> str:
     text = text.casefold()
     replacements = {
-        "需不需要": "要不要",
-        "是否": "要不要",
-        "验证": "测试",
-        "test": "测试",
-        "tests": "测试",
-        "review": "审查",
-        "代码审查": "审查",
-        "检查": "审查",
-        "回读": "读取确认",
-        "确认中文": "中文正常",
-        "agent": "智能体",
-        "ai": "智能体",
+        "tests": "test",
+        "verification": "test",
+        "verify": "test",
+        "code review": "review",
+        "check": "review",
+        "readback": "read back",
+        "agent": "assistant",
+        "ai": "assistant",
     }
     for source, target in replacements.items():
         text = text.replace(source, target)
@@ -441,29 +436,28 @@ def _char_ngrams(text: str, size: int = 2) -> set[str]:
 
 def _keyword_overlap(left: str, right: str) -> float:
     keywords = [
-        "测试",
-        "代码",
-        "代码完成",
-        "代码改动",
-        "审查",
-        "验证",
-        "覆盖率",
-        "边界",
-        "安全",
-        "中文",
-        "回复",
-        "回答",
-        "用户问题",
-        "简洁",
-        "详细",
-        "回读",
+        "test",
+        "code",
+        "implementation",
+        "change",
+        "review",
+        "verify",
+        "coverage",
+        "edge",
+        "safety",
+        "language",
+        "reply",
+        "answer",
+        "user question",
+        "concise",
+        "detailed",
+        "read back",
         "linear",
-        "沉淀",
-        "文档",
-        "不要问",
-        "自动",
-        "本地",
-        "偏好",
+        "document",
+        "do not ask",
+        "auto",
+        "local",
+        "preference",
         "codex",
         "openclaw",
     ]
@@ -484,7 +478,7 @@ def _clean(text: str) -> str:
 
 def _short(text: str, limit: int) -> str:
     text = _clean(text)
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return text if len(text) <= limit else text[: max(0, limit - 3)] + "..."
 
 
 def _has_any(text: str, markers: tuple[str, ...]) -> bool:
@@ -493,7 +487,7 @@ def _has_any(text: str, markers: tuple[str, ...]) -> bool:
 
 
 def _sentences(text: str) -> list[str]:
-    parts = re.split(r"(?<=[。！？!?])\s*|\n+", text)
+    parts = re.split(r"(?<=[.!?])\s*|\n+", text)
     return [_clean(part) for part in parts if _clean(part)]
 
 
@@ -503,44 +497,44 @@ def _generalize_preference(sentence: str, context: str = "") -> str:
     lowered = joined.casefold()
     if not text:
         return ""
-    if any(word in joined for word in ("回读", "中文", "乱码")) and any(
-        word in joined for word in ("必须", "一定要", "不要破坏", "检查", "确认")
+    if any(word in lowered for word in ("read back", "external system", "encoding", "mojibake")) and any(
+        word in lowered for word in ("must", "always", "check", "confirm", "verify")
     ):
-        return "写入包含中文的外部系统后，必须回读确认中文正常且 Markdown 结构未损坏。"
-    if any(word in lowered for word in ("测试", "test", "pytest", "验证")) and any(
-        word in joined for word in ("以后", "默认", "每次", "不要问", "不用问", "别问")
+        return "After writing content to an external system, read back the content and verify text and Markdown structure."
+    if any(word in lowered for word in ("test", "pytest", "verify", "verification")) and any(
+        word in lowered for word in ("from now on", "default", "every time", "do not ask")
     ):
-        return "代码或脚本改动完成后，默认运行相关测试或验证；无法运行时必须明确说明原因和替代验证方式。"
-    if any(word in lowered for word in ("review", "审查")) and (
-        any(word in joined for word in ("代码", "实现", "改动", "边界", "异常", "回归"))
+        return "After code or script changes, run relevant tests or verification by default; if they cannot run, explain why and provide alternative verification."
+    if "review" in lowered and (
+        any(word in lowered for word in ("code", "implementation", "change", "edge", "exception", "regression"))
     ):
-        return "做代码 review 时优先指出 bug、回归风险和缺失测试，再补充摘要。"
-    if any(word in joined for word in ("沉淀", "文档", "复盘")) and any(
-        word in joined for word in ("方案", "设计", "深度", "讨论", "复用", "复杂", "决策", "整理")
+        return "During code review, prioritize bugs, regression risk, and missing tests before adding a summary."
+    if any(word in lowered for word in ("document", "write down", "retrospective", "save the conclusion", "save the conclusions")) and any(
+        word in lowered for word in ("plan", "design", "deep", "discussion", "reusable", "complex", "decision", "organize")
     ):
-        return "深度研讨、方案设计或复盘形成可复用结论时，主动询问是否沉淀为 Markdown 文档。"
+        return "When deep discussion, solution design, or retrospective work produces reusable conclusions, ask whether to save them as Markdown documentation."
     if "Linear" in joined or "linear" in lowered or "issue" in lowered:
-        if any(word in joined for word in ("完成", "阶段性", "记录", "更新", "回读", "中文")) and not looks_like_one_off_task(text):
-            return "完成阶段性成果后，询问是否需要更新 Linear issue；写入中文后必须回读校验。"
+        if any(word in lowered for word in ("done", "completed", "phase", "record", "update", "read back")) and not looks_like_one_off_task(text):
+            return "After a phase is completed, ask whether the Linear issue should be updated; read back external writes when applicable."
         return ""
-    if any(word in lowered for word in ("git", "commit", "push", "分支")) and any(
-        word in joined for word in ("不要", "别", "先不要", "本地", "留在本地")
+    if any(word in lowered for word in ("git", "commit", "push", "branch")) and any(
+        word in lowered for word in ("do not", "no ", "local", "keep local")
     ):
-        return "代码修改默认先保留在本地，不主动 commit 或 push，除非用户明确要求。"
-    if any(word in lowered for word in ("edit", "编辑")) and any(word in joined for word in ("不要覆盖", "别覆盖", "覆盖")):
-        return "修改已有文件时优先使用增量编辑，避免覆盖用户本地未同步修改。"
-    if any(word in joined for word in ("结论句", "问句")) and any(word in joined for word in ("标题", "title")):
-        return "撰写标题时使用结论句，避免使用问句形式。"
-    if "中文" in joined and any(word in joined for word in ("回复", "回答", "输出")):
-        return "默认使用中文回复用户。"
-    if "动画" in joined and any(word in joined for word in ("慢", "较慢", "过快", "速度")):
-        return "设计交互动画或过渡效果时，使用较慢的动画速度，避免过快的跳跃或涟漪效果。"
-    if any(word in joined for word in ("反问", "不用问", "不要问", "别问", "说了做其实没做", "说了做")):
-        return "用户已经明确要求执行时，避免反复确认；在风险可控时直接推进并汇报结果。"
-    if any(word in joined for word in ("简洁", "短一点", "两句话", "少废话", "不要长文", "眼花", "子弹点", "分点", "不要全部平铺")):
-        return "回复和文档输出偏好简洁、分点、易扫读，避免大段平铺和冗长解释。"
-    if any(word in joined for word in ("先给", "结论", "大纲")) and any(word in joined for word in ("以后", "默认", "每次", "先")):
-        return "回复复杂问题时先给结论或大纲，再展开必要细节。"
+        return "Keep code changes local by default and do not commit or push unless the user explicitly asks."
+    if "edit" in lowered and any(word in lowered for word in ("do not overwrite", "avoid overwrite", "overwrite")):
+        return "When modifying existing files, prefer incremental edits and avoid overwriting unsynced local changes."
+    if any(word in lowered for word in ("statement headline", "question headline")) and "title" in lowered:
+        return "When writing titles, use statement-style titles and avoid question-style titles."
+    if "english" in lowered and any(word in lowered for word in ("reply", "answer", "output")):
+        return "Use English when replying to the user by default."
+    if "animation" in lowered and any(word in lowered for word in ("slow", "slower", "too fast", "speed")):
+        return "When designing interaction animations or transitions, use slower motion and avoid overly fast jumps or ripple effects."
+    if any(word in lowered for word in ("do not ask", "no confirmation", "stop asking", "just do it")):
+        return "When the user has clearly asked for execution, avoid repeated confirmation; proceed when risk is controlled and report results."
+    if any(word in lowered for word in ("concise", "brief", "two sentences", "less verbose", "no long answer", "bullets", "scannable")):
+        return "Prefer concise, bulleted, scannable replies and documents; avoid long unstructured paragraphs."
+    if any(word in lowered for word in ("conclusion", "outline")) and any(word in lowered for word in ("from now on", "default", "every time", "first")):
+        return "For complex questions, give the conclusion or outline first, then expand only as needed."
     if looks_like_one_off_task(text) and not should_recall_user_text(text):
         return ""
     if looks_like_raw_user_fragment(text):
@@ -552,18 +546,18 @@ def _generalize_preference(sentence: str, context: str = "") -> str:
 
 def _category(text: str) -> str:
     lowered = text.casefold()
-    if any(word in lowered for word in ("review", "审查", "边界情况", "异常路径", "回归风险", "bug")):
+    if any(word in lowered for word in ("review", "edge case", "exception path", "regression risk", "bug")):
         return "review"
-    if any(word in lowered for word in ("测试", "验证", "覆盖率", "test", "依赖", "跑不了", "代码完成", "代码改动", "改代码")):
+    if any(word in lowered for word in ("test", "verify", "coverage", "dependency", "cannot run", "code complete", "code change", "code", "implementation")):
         return "test"
-    if any(word in lowered for word in ("文档", "沉淀", "方案设计", "复盘", "markdown")):
+    if any(word in lowered for word in ("document", "documentation", "solution design", "retrospective", "markdown")):
         return "docs"
-    if any(word in lowered for word in ("回复", "回答", "用户问题", "简洁", "详细", "长文", "展开", "concise", "brief", "detailed")):
+    if any(word in lowered for word in ("reply", "answer", "user question", "concise", "brief", "detailed", "long-form")):
         return "reply"
     if any(word in lowered for word in ("linear", "issue")):
         return "linear"
-    if any(word in lowered for word in ("中文", "回读", "乱码")):
-        return "chinese-write"
+    if any(word in lowered for word in ("read back", "encoding", "external write")):
+        return "external-write"
     return ""
 
 
@@ -576,40 +570,42 @@ def _next_user_message(messages: list[Any], start: int) -> Any | None:
 
 def _infer_applies_to(sentence: str) -> str:
     lowered = sentence.casefold()
-    if any(word in lowered for word in ("git", "commit", "push", "分支", "代码", "测试", "review", "验证", "coverage", "覆盖率")):
-        return "当 agent 修改代码、完成实现、询问测试或 review 标准时"
+    if any(word in lowered for word in ("git", "commit", "push", "branch", "code", "test", "review", "verify", "coverage")):
+        return "When the agent changes code, completes implementation, or discusses test/review standards"
     if "Linear" in sentence or "issue" in sentence.casefold():
-        return "当 agent 完成阶段性成果并可能需要更新 Linear issue 时"
-    if "中文" in sentence and any(word in sentence for word in ("回复", "回答", "输出")):
-        return "当 agent 回复用户时"
-    if "中文" in sentence or "回读" in sentence:
-        return "当 agent 把包含中文的内容写入外部系统后"
-    if "文档" in sentence or "沉淀" in sentence:
-        return "当讨论有复用价值、形成方案或决策时"
-    if any(word in sentence for word in ("简洁", "分点", "子弹点", "结论", "大纲", "回复", "长文")):
-        return "当 agent 回复问题、汇报结果或组织长内容时"
-    if any(word in sentence for word in ("反复确认", "反问", "直接推进")):
-        return "当用户已经明确要求 agent 执行任务时"
-    return "当 agent 需要选择回复方式或执行节奏时"
+        return "When the agent completes a phase and may need to update a Linear issue"
+    if "english" in lowered and any(word in lowered for word in ("reply", "answer", "output")):
+        return "When the agent replies to the user"
+    if "read back" in lowered:
+        return "After the agent writes content to an external system"
+    if "document" in lowered or "documentation" in lowered:
+        return "When a discussion produces reusable decisions or plans"
+    if any(word in lowered for word in ("concise", "bullets", "conclusion", "outline", "reply", "long-form")):
+        return "When the agent answers questions, reports results, or organizes long content"
+    if any(word in lowered for word in ("repeated confirmation", "directly proceed")):
+        return "When the user has clearly asked the agent to execute a task"
+    return "When the agent chooses response style or execution cadence"
 
 
 def _infer_triggers(sentence: str) -> list[str]:
     triggers = []
-    if any(word in sentence.casefold() for word in ("代码", "测试", "review", "验证")):
-        triggers.append("代码完成、测试、review、验证")
+    lowered = sentence.casefold()
+    if any(word in lowered for word in ("code", "test", "review", "verify")):
+        triggers.append("code completion, tests, review, verification")
     if "Linear" in sentence or "issue" in sentence.casefold():
-        triggers.append("完成任务或阶段性成果")
-    if "中文" in sentence or "回读" in sentence:
-        triggers.append("写入包含中文的外部内容")
-    if "沉淀" in sentence or "文档" in sentence:
-        triggers.append("深度讨论、方案设计、复盘")
+        triggers.append("task or phase completion")
+    if "read back" in lowered:
+        triggers.append("external content write")
+    if "document" in lowered or "documentation" in lowered:
+        triggers.append("deep discussion, solution design, retrospective")
     return triggers or [sentence[:60]]
 
 
 def _infer_exceptions(sentence: str) -> list[str]:
-    exceptions = ["用户明确给出相反指令时，以最新指令为准"]
-    if "不要" in sentence or "不用" in sentence:
-        exceptions.append("高风险或上下文不足时仍需升级给真人")
+    lowered = sentence.casefold()
+    exceptions = ["When the user explicitly gives a conflicting instruction, follow the latest instruction."]
+    if "do not" in lowered or "no " in lowered:
+        exceptions.append("Escalate to the user when risk is high or context is insufficient.")
     return exceptions
 
 
@@ -673,15 +669,17 @@ def _relevance_score(query: str, record: PreferenceRecord) -> float:
     record_category = _category(record_scope)
     if query_category and record_category == query_category:
         score = max(score, 0.26)
+    elif query_category and record_category and query_category != record_category:
+        score = min(score, 0.12)
     return score
 
 
-DETAIL_CONFLICT_WORDS = ("详细", "展开", "完整", "充分解释", "长文", "exhaustive", "detailed")
-CONCISE_CONFLICT_WORDS = ("简洁", "简短", "短一点", "不要长文", "别啰嗦", "少废话", "concise", "brief", "short")
-TEST_REQUIRED_WORDS = ("测试", "验证", "pytest", "test", "verify", "verification", "回归")
-TEST_SKIP_WORDS = ("不用测试", "不要测试", "跳过测试", "不测", "无需验证", "no test", "skip test", "without verification")
-ASK_WORDS = ("确认", "询问", "反问", "ask", "confirm", "manual")
-NO_ASK_WORDS = ("不用问", "不要问", "无需确认", "直接", "自动", "不反问", "do not ask", "no confirmation")
+DETAIL_CONFLICT_WORDS = ("exhaustive", "detailed", "full explanation", "long-form", "fully explain")
+CONCISE_CONFLICT_WORDS = ("concise", "brief", "short", "shorter", "no long-form", "less verbose")
+TEST_REQUIRED_WORDS = ("test", "verify", "verification", "pytest", "regression")
+TEST_SKIP_WORDS = ("no test", "skip test", "without verification", "do not test", "skip verification")
+ASK_WORDS = ("ask", "confirm", "manual", "clarify")
+NO_ASK_WORDS = ("do not ask", "no confirmation", "directly", "automatic", "no clarification")
 
 
 def _find_conflicts_among(records: list[PreferenceRecord]) -> list[PreferenceRecord]:
@@ -711,7 +709,7 @@ def _backend_conflict_response(
     matches: list[dict[str, Any]],
     conflicts: list[PreferenceRecord],
 ) -> dict[str, Any]:
-    options = "；".join(f"{index + 1}. {record.preference}" for index, record in enumerate(conflicts))
+    options = "; ".join(f"{index + 1}. {record.preference}" for index, record in enumerate(conflicts))
     conflict_ids = [record.id for record in conflicts]
     return {
         "decision": "escalate",
@@ -730,10 +728,10 @@ def _backend_conflict_response(
             ],
         },
         "conflict_preference_ids": sorted(conflict_ids),
-        "agent_instruction": f"检测到本轮命中的用户偏好互相冲突，不能同时应用。请简短反问用户本次采用哪一种，或是否两个都不适用：{options}。",
+        "agent_instruction": f"Matched user preferences conflict and cannot be applied together. Briefly ask which option to use this time, or whether neither applies: {options}.",
         "escalate": True,
         "clarification_required": True,
-        "reason": "top-3 命中的偏好之间存在冲突，不能拼接注入。",
+        "reason": "The top matched preferences conflict and cannot be concatenated for injection.",
     }
 
 
@@ -743,8 +741,8 @@ def _no_preference(task: str) -> dict[str, Any]:
         "matched_preferences": [],
         "agent_instruction": "",
         "escalate": True,
-        "reason": "偏好库为空或没有找到足够相关的偏好",
-        "cold_start_hint": "可以先捕获当前 session 或导入历史对话，再增量更新 Markdown 偏好库。",
+        "reason": "Preference store is empty or no sufficiently relevant preference was found.",
+        "cold_start_hint": "Capture the current session or import conversation history first, then incrementally update the Markdown preference store.",
         "task": task,
     }
 

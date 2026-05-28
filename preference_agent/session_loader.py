@@ -13,16 +13,13 @@ SUPPORTED_EXTENSIONS = {".json", ".jsonl", ".md", ".txt"}
 ROLE_ALIASES = {
     "user": "user",
     "human": "user",
-    "用户": "user",
-    "我": "user",
+    "me": "user",
     "assistant": "assistant",
     "ai": "assistant",
-    "助手": "assistant",
     "kimi": "assistant",
     "codex": "assistant",
     "openclaw": "assistant",
     "system": "system",
-    "系统": "system",
 }
 
 
@@ -131,7 +128,7 @@ def _message_content(item: dict[str, Any]) -> str:
 def _markdown_or_text_session(path: Path) -> Session:
     text = path.read_text(encoding="utf-8-sig")
     marker_re = re.compile(
-        r"^(用户|我|User|Human|Assistant|助手|AI|Kimi|Codex|OpenClaw|System|系统)\s*[:：]\s*(.*)$",
+        r"^(User|Human|Me|Assistant|AI|Kimi|Codex|OpenClaw|System)\s*[:]\s*(.*)$",
         re.I,
     )
     messages: list[SessionMessage] = []
@@ -164,4 +161,3 @@ def _plain_session(path: Path) -> Session:
 
 def _normalize_role(role: str) -> str:
     return ROLE_ALIASES.get(role.strip().casefold(), ROLE_ALIASES.get(role.strip(), "user"))
-

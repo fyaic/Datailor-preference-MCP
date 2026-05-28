@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -16,6 +17,7 @@ from preference_agent.store import MarkdownPreferenceStore
 from preference_agent.ui.server import build_manifesto
 from preference_agent.fitting import FittingInput, analyze_memory_rot, apply_fitting_plan, extract_insights, run_fitting
 from preference_agent.fitting_models import FittingInstruction
+from preference_agent.fitting_store import FittingJobStore
 
 
 class FittingTests(unittest.TestCase):
@@ -39,9 +41,9 @@ class FittingTests(unittest.TestCase):
             store.save(
                 [
                     PreferenceRecord(
-                        title="测试",
-                        applies_to="代码修改",
-                        preference="代码修改后默认运行相关测试。",
+                        title="Tests",
+                        applies_to="Code changes",
+                        preference="Run relevant tests by default after code changes.",
                         status="active",
                     )
                 ]
@@ -50,11 +52,11 @@ class FittingTests(unittest.TestCase):
             source_path.write_text(
                 "\n".join(
                     [
-                        "用户: 以后修改代码后，默认先跑相关测试再交付。如果没法跑，要明确说明。",
-                        "用户: 咱们这类长任务先读仓库，再写 Harness，再按 PRD 自检，不要一上来直接改代码。",
-                        "用户: PowerShell 里中文写入外部系统后必须回读，有时候终端显示正常不代表外部系统正常。",
-                        "用户: 你经常在没回读中文的情况下说完成，这会导致乱码问题被漏掉。以后写入后先回读。",
-                        "用户: pipx install git+https://github.com/fyaic/Datailor-preference-MCP.git",
+                        "User: From now on, after changing code, run relevant tests before delivery. If tests cannot run, clearly explain why.",
+                        "User: For this kind of long-running task, first read the repo, then write the Harness, then self-check against the PRD; do not jump straight into code changes.",
+                        "User: In PowerShell, after writing to an external system, you must read the content back because terminal output alone does not prove the external system is correct.",
+                        "User: You often say done without reading external writes back, which misses encoding problems. From now on, read back after writing.",
+                        "User: pipx install git+https://github.com/fyaic/Datailor-preference-MCP.git",
                     ]
                 ),
                 encoding="utf-8",
@@ -89,7 +91,7 @@ class FittingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             source_path = root / "codex-history.md"
-            source_path.write_text("用户: 以后修改代码后，默认先跑相关测试再交付。", encoding="utf-8")
+            source_path.write_text("User: From now on, after changing code, run relevant tests before delivery.", encoding="utf-8")
 
             with patch(
                 "preference_agent.fitting.auto_discover_sources",
@@ -113,11 +115,11 @@ class FittingTests(unittest.TestCase):
                 source="fixture",
                 text="\n".join(
                     [
-                        "如果测试失败，先重新运行相关命令，仍失败就说明阻塞原因。",
-                        "阶段性成果完成后，询问是否需要更新 Linear issue。",
-                        "用户常用 Obsidian 管理长期文档。",
-                        "我习惯先给结论再给验证结果。",
-                        "项目文档必须统一使用 Datailor 和 Fitting 命名。",
+                        "If tests fail, first rerun the relevant command, and if it still fails, explain the blocker.",
+                        "After a phase is completed, ask whether the Linear issue should be updated.",
+                        "The user uses Obsidian to manage long-term documentation.",
+                        "I usually give the conclusion before verification results.",
+                        "Project documentation must consistently use the Datailor and Fitting names.",
                     ]
                 ),
             )
@@ -136,7 +138,7 @@ class FittingTests(unittest.TestCase):
             root = Path(temp)
             source_path = root / "history.md"
             fitting_dir = root / ".fitting"
-            source_path.write_text("用户: 以后修改代码后，默认先跑相关测试再交付。", encoding="utf-8")
+            source_path.write_text("User: From now on, after changing code, run relevant tests before delivery.", encoding="utf-8")
 
             with patch("preference_agent.fitting.extract_insights", side_effect=RuntimeError("boom")):
                 result = run_fitting(store_path=root / "prefs.md", source=source_path, fitting_dir=fitting_dir)
@@ -151,37 +153,37 @@ class FittingTests(unittest.TestCase):
     def test_memory_rot_flags_duplicate_conflict_stale_and_negative_feedback(self) -> None:
         duplicate_a = PreferenceRecord(
             id="pref-a",
-            title="测试",
-            applies_to="代码修改",
-            preference="代码修改后默认运行相关测试。",
+            title="Tests",
+            applies_to="Code changes",
+            preference="Run relevant tests by default after code changes.",
             status="active",
         )
         duplicate_b = PreferenceRecord(
             id="pref-b",
-            title="测试前置",
-            applies_to="代码修改",
-            preference="修改代码后默认先执行相关测试。",
+            title="Test first",
+            applies_to="Code changes",
+            preference="Run relevant tests first after modifying code.",
             status="active",
         )
         concise = PreferenceRecord(
             id="pref-c",
-            title="简洁",
-            applies_to="回复",
-            preference="回复时默认保持简洁，少废话。",
+            title="Concise",
+            applies_to="Replies",
+            preference="Keep replies concise and less verbose by default.",
             status="active",
         )
         detailed = PreferenceRecord(
             id="pref-d",
-            title="详细",
-            applies_to="回复",
-            preference="回复时默认提供详细长文解释。",
+            title="Detailed",
+            applies_to="Replies",
+            preference="Provide detailed long-form explanations by default when replying.",
             status="active",
         )
         stale = PreferenceRecord(
             id="pref-e",
-            title="旧偏好",
-            applies_to="文档",
-            preference="写文档时默认加入很长的背景说明。",
+            title="Old preference",
+            applies_to="Documentation",
+            preference="Include very long background explanations by default when writing documentation.",
             status="active",
             confidence="low",
             updated_at="2025-01-01T00:00:00+00:00",
@@ -216,7 +218,7 @@ class FittingTests(unittest.TestCase):
             fitting_dir = root / ".fitting"
             store = MarkdownPreferenceStore(store_path)
             store.ensure()
-            source_path.write_text("用户: 以后修改代码后，默认先跑相关测试再交付。", encoding="utf-8")
+            source_path.write_text("User: From now on, after changing code, run relevant tests before delivery.", encoding="utf-8")
             result = run_fitting(store_path=store_path, source=source_path, fitting_dir=fitting_dir)
             change = next(item for item in result.apply_plan.changes if item.type == "add_preference")
 
@@ -232,13 +234,13 @@ class FittingTests(unittest.TestCase):
             records = MarkdownPreferenceStore(store_path).load()
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0].status, "needs_review")
-            self.assertIn("测试", records[0].preference)
+            self.assertIn("test", records[0].preference.casefold())
 
     def test_cli_fitting_outputs_json_and_human_report_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             source = root / "history.md"
-            source.write_text("用户: 以后修改代码后，默认先跑相关测试再交付。", encoding="utf-8")
+            source.write_text("User: From now on, after changing code, run relevant tests before delivery.", encoding="utf-8")
 
             out = _run_cli(
                 [
@@ -259,13 +261,72 @@ class FittingTests(unittest.TestCase):
             self.assertEqual(out["status"], "completed")
             self.assertTrue(Path(out["report_file"]).exists())
 
+    def test_cli_fitting_no_review_passes_false_to_runner(self) -> None:
+        class FakeResult:
+            def to_dict(self) -> dict[str, object]:
+                return {"job_id": "fake", "status": "completed", "stats": {}, "report_file": ""}
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch("preference_agent.cli.run_fitting", return_value=FakeResult()) as mocked:
+                out = _run_cli(["--store", str(root / "prefs.md"), "fitting", "--no-review", "--json"])
+
+            self.assertEqual(out["status"], "completed")
+            self.assertFalse(mocked.call_args.kwargs["review"])
+
+    def test_fitting_show_report_handles_empty_report_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "history.md"
+            fitting_dir = root / ".fitting"
+            source.write_text("User: From now on, after changing code, run relevant tests before delivery.", encoding="utf-8")
+            result = run_fitting(store_path=root / "prefs.md", source=source, fitting_dir=fitting_dir)
+            result_path = Path(result.result_file)
+            data = _read_json(result_path)
+            data["report_file"] = ""
+            result_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            text = _run_cli_text(["fitting-show", result.job_id, "--fitting-dir", str(fitting_dir), "--report"])
+
+            self.assertEqual(text, "\n")
+
+    def test_fitting_store_and_cli_report_missing_jobs_semantically(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fitting_dir = root / ".fitting"
+            store = FittingJobStore(fitting_dir)
+
+            with self.assertRaisesRegex(ValueError, "job not found: missing"):
+                store.read_result("missing")
+            with self.assertRaisesRegex(ValueError, "job not found: missing"):
+                store.read_apply_plan("missing")
+
+            shown = _run_cli(["fitting-show", "missing", "--fitting-dir", str(fitting_dir), "--json"])
+            applied = _run_cli(
+                [
+                    "--store",
+                    str(root / "prefs.md"),
+                    "fitting-apply",
+                    "missing",
+                    "--fitting-dir",
+                    str(fitting_dir),
+                    "--accept",
+                    "change-missing",
+                ]
+            )
+
+            self.assertFalse(shown["ok"])
+            self.assertIn("job not found: missing", shown["error"])
+            self.assertFalse(applied["ok"])
+            self.assertIn("job not found: missing", applied["error"])
+
     def test_mcp_fitting_tools_and_ui_latest_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             source = root / "history.md"
             store = root / "prefs.md"
             fitting_dir = root / ".fitting"
-            source.write_text("用户: 以后修改代码后，默认先跑相关测试再交付。", encoding="utf-8")
+            source.write_text("User: From now on, after changing code, run relevant tests before delivery.", encoding="utf-8")
             engine = build_mcp_engine(store)
             with patch.dict("os.environ", {"DATAILOR_FITTING_DIR": str(fitting_dir)}, clear=False):
                 listed = handle_request(
@@ -275,6 +336,7 @@ class FittingTests(unittest.TestCase):
                 tool_names = {item["name"] for item in listed["result"]["tools"]}
                 self.assertIn("start_fitting", tool_names)
                 self.assertEqual(sum(1 for name in tool_names if name.startswith("start_fitting")), 1)
+                self.assertIn("mode=auto", json.dumps(listed, ensure_ascii=False))
                 started = handle_request(
                     {
                         "jsonrpc": "2.0",
@@ -312,6 +374,15 @@ def _run_cli(argv: list[str]) -> dict:
     if code != 0:
         raise AssertionError(f"CLI exited with {code}: {buffer.getvalue()}")
     return json.loads(buffer.getvalue())
+
+
+def _run_cli_text(argv: list[str]) -> str:
+    buffer = StringIO()
+    with redirect_stdout(buffer):
+        code = cli_main(argv)
+    if code != 0:
+        raise AssertionError(f"CLI exited with {code}: {buffer.getvalue()}")
+    return buffer.getvalue()
 
 
 def _read_json(path: Path) -> dict:

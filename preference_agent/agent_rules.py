@@ -21,6 +21,9 @@ class AgentRulesInstallResult:
     snippet: str
     changed: bool
     action: str
+    managed_start: str
+    managed_end: str
+    snippet_preview: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -78,6 +81,9 @@ def install_agent_rules(
         snippet=snippet_label,
         changed=changed,
         action=action,
+        managed_start=RULES_START,
+        managed_end=RULES_END,
+        snippet_preview=_snippet_preview(snippet_text),
     )
 
 
@@ -87,3 +93,8 @@ def _find_existing_markers(existing: str) -> tuple[str, str] | tuple[None, None]
     if LEGACY_RULES_START in existing and LEGACY_RULES_END in existing:
         return LEGACY_RULES_START, LEGACY_RULES_END
     return None, None
+
+
+def _snippet_preview(snippet_text: str, max_lines: int = 8) -> str:
+    lines = [line.rstrip() for line in snippet_text.splitlines() if line.strip()]
+    return "\n".join(lines[:max_lines])

@@ -12,77 +12,74 @@ from .quality import should_recall_user_text
 
 
 POSITIVE_MARKERS = (
-    "我喜欢",
-    "我习惯",
-    "我倾向",
-    "我更愿意",
-    "我希望",
-    "我偏好",
-    "以后",
-    "默认",
-    "每次",
-    "总是",
-    "优先",
+    "i like",
+    "i usually",
+    "i tend",
+    "i would rather",
+    "i want",
+    "i prefer",
+    "from now on",
+    "default",
+    "every time",
+    "always",
+    "prioritize",
 )
 NEGATIVE_MARKERS = (
-    "不要",
-    "别",
-    "不用",
-    "不必",
-    "无需",
-    "避免",
-    "禁止",
-    "不能",
-    "我不喜欢",
-    "我讨厌",
-    "拒绝",
+    "do not",
+    "avoid",
+    "no need",
+    "unnecessary",
+    "forbid",
+    "cannot",
+    "i dislike",
+    "i hate",
+    "reject",
 )
-CONDITIONAL_MARKERS = ("如果", "除非", "否则", "当", "在", "情况下")
-COMPARISON_MARKERS = ("比起", "相比", "更喜欢", "更适合", "宁愿", "也不", "优于")
+CONDITIONAL_MARKERS = ("if", "unless", "otherwise", "when", "while", "case")
+COMPARISON_MARKERS = ("compared with", "prefer", "better suited", "would rather", "over")
 INSTRUCTION_MARKERS = (
-    "先给",
-    "先做",
-    "分步骤",
-    "最后总结",
-    "默认跑",
-    "主动问",
-    "回读",
-    "验收",
-    "测试",
+    "give first",
+    "do first",
+    "step by step",
+    "summarize last",
+    "run by default",
+    "ask proactively",
+    "read back",
+    "acceptance",
+    "test",
     "review",
-    "沉淀",
-    "文档",
+    "document",
 )
 CORRECTION_MARKERS = (
-    "不对",
-    "错了",
-    "不是这个意思",
-    "你理解错了",
-    "我的意思是",
-    "应该是",
-    "你应该",
-    "纠正",
+    "wrong",
+    "incorrect",
+    "not what i meant",
+    "you misunderstood",
+    "i mean",
+    "should be",
+    "you should",
+    "correct",
 )
-EMPHASIS_MARKERS = ("重申", "再次强调", "我说过", "记住", "一定要", "必须")
-TEMPORARY_MARKERS = ("这次", "今天", "临时", "先暂时", "本次")
+EMPHASIS_MARKERS = ("restate", "again", "i said", "remember", "must")
+TEMPORARY_MARKERS = ("this time", "today", "temporary", "for now")
 
 
 PREFERENCE_EXAMPLES = [
-    "以后代码修改完成后默认运行相关测试，不要每次询问。",
-    "把结论写短一点，不要长篇解释。",
-    "先给我大纲，再开始实现。",
-    "方案设计和复杂问题拆解之后，主动询问是否沉淀成文档。",
-    "写入包含中文的外部系统后，必须回读确认中文没有乱码。",
-    "不要伪造结果，测试跑不了就说明原因。",
-    "默认用中文回复。",
-    "回复先给验证结果，再给结论。",
-    "遇到高风险操作先确认，不要直接执行。",
-    "优先沿用现有代码风格，不要引入不必要的新框架。",
-    "每个阶段完成后记录到 Linear issue。",
-    "不要把同一份信息写成多份重复文件。",
-    "偏好记录要人类可读，一条偏好一句话。",
-    "长任务要有 checkpoint，可以中断恢复。",
-    "本地模型和云模型要使用同一套接口。",
+    "After code changes, run relevant tests by default without asking every time.",
+    "Keep conclusions short and avoid long explanations.",
+    "Give me the outline before implementation.",
+    "After solution design or complex problem decomposition, ask whether to save the conclusion as documentation.",
+    "After writing to an external system, read back the content and verify there is no encoding damage.",
+    "Do not fabricate results; if tests cannot run, explain why.",
+    "Reply in English by default.",
+    "Give verification results before conclusions.",
+    "Confirm before high-risk operations; do not execute blindly.",
+    "Prefer existing code style and avoid unnecessary new frameworks.",
+    "Record each completed phase in the Linear issue.",
+    "Do not write duplicate copies of the same information.",
+    "Preference records should be human-readable, one preference per sentence.",
+    "Long tasks need checkpoints and resumability.",
+    "Local and cloud models should share the same interface.",
     "I prefer concise answers.",
     "Do not ask before running tests after code changes.",
     "Use semantic intent, not exact keyword matching.",
@@ -112,7 +109,7 @@ class RecallCandidate:
     scores: dict[str, float] = field(default_factory=dict)
     final_score: float = 0.0
     context_hint: str = ""
-    applies_to: str = "从用户历史输入召回的候选偏好，需模型精提或人工抽检后合并"
+    applies_to: str = "Candidate preference recalled from user history; requires model refinement or human sampling before merge"
     created_at: str = field(default_factory=now_iso)
 
 
@@ -211,14 +208,14 @@ class MultiRouteRecallEngine:
                     source=f"behavior:{key}",
                     source_type="behavior_pattern",
                     scope=sample.scope,
-                    content=f"用户多次提出类似请求：{_truncate(sample.content, self.config.max_text_chars)}",
+                    content=f"The user repeatedly made similar requests: {_truncate(sample.content, self.config.max_text_chars)}",
                     evidence_quote=sample.content,
                     confidence=_confidence(score),
                     routes=["behavior"],
                     scores={"behavior": round(score, 4)},
                     final_score=score,
                     context_hint=sample.context_hint,
-                    applies_to="当 agent 处理同类任务或回复结构时，参考用户反复提出的行为习惯",
+                    applies_to="When the agent handles similar tasks or response structures, use repeated user behavior as guidance",
                 )
             )
         return candidates
@@ -317,7 +314,7 @@ def structure_recall_score(text: str, context_hint: str = "") -> float:
     score += 0.24 * _hit_count(lowered, EMPHASIS_MARKERS)
     if context_hint:
         score += 0.18
-    if "但是" in text or "而不是" in text:
+    if "but" in lowered or "rather than" in lowered:
         score += 0.18
     return min(1.0, score)
 
@@ -327,16 +324,15 @@ def behavior_template_key(text: str) -> str:
     if not cleaned or len(cleaned) < 8:
         return ""
     patterns = [
-        (r"先给我.{0,12}", "先给我"),
-        (r"分步骤.{0,12}", "分步骤"),
-        (r".{0,8}测试.{0,12}", "测试"),
-        (r".{0,8}验证.{0,12}", "验证"),
-        (r".{0,8}回读.{0,12}", "回读"),
+        (r"outlinefirst.{0,12}", "outline-first"),
+        (r"stepbystep.{0,12}", "step-by-step"),
+        (r".{0,8}test.{0,12}", "test"),
+        (r".{0,8}verify.{0,12}", "verify"),
+        (r".{0,8}readback.{0,12}", "read-back"),
         (r".{0,8}linear.{0,12}", "linear"),
-        (r".{0,8}沉淀.{0,12}", "沉淀"),
-        (r".{0,8}文档.{0,12}", "文档"),
-        (r"不要.{0,12}", "不要"),
-        (r"别.{0,12}", "别"),
+        (r".{0,8}document.{0,12}", "document"),
+        (r"donot.{0,12}", "do-not"),
+        (r"avoid.{0,12}", "avoid"),
     ]
     for pattern, label in patterns:
         if re.search(pattern, cleaned):
@@ -367,7 +363,7 @@ def _dedupe_candidates(candidates: list[RecallCandidate]) -> list[RecallCandidat
 
 def _truncate(text: str, limit: int) -> str:
     text = " ".join(text.split()).strip()
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return text if len(text) <= limit else text[: max(0, limit - 3)] + "..."
 
 
 def _env_int(name: str, default: int) -> int:

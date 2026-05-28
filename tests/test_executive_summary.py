@@ -34,7 +34,7 @@ class ExecutiveSummaryTests(unittest.TestCase):
             self.assertTrue(update.updated)
             self.assertEqual(summary.status, "ready")
             self.assertIn("After code changes", summary.text)
-            self.assertIn("系统目前理解到", summary.text)
+            self.assertIn("The current preference profile", summary.text)
 
     def test_refresh_skips_without_delta_unless_forced(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

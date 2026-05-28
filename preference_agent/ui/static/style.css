@@ -197,7 +197,7 @@ input {
   word-break: break-all;
 }
 
-/* ── Injection Log (entry list, not table) ── */
+/* Injection Log (entry list, not table) */
 .injection-list {
   border-top: 2px solid var(--line);
 }
@@ -286,6 +286,52 @@ input {
   line-height: 1.45;
 }
 
+.fitting-change-list {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.fitting-change {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  border: 1px solid var(--soft);
+  padding: 10px 12px;
+}
+
+.fitting-change.applied {
+  opacity: 0.55;
+}
+
+.fitting-change input {
+  width: 18px;
+  margin-top: 3px;
+}
+
+.fitting-change strong,
+.fitting-change small,
+.fitting-change em {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.fitting-change small {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.fitting-change em {
+  font-style: normal;
+  margin-top: 6px;
+}
+
+.fitting-actions {
+  border-top: 1px solid var(--soft);
+  padding-top: 12px;
+}
+
 .matched-list {
   display: flex;
   flex-wrap: wrap;
@@ -300,7 +346,7 @@ input {
 }
 
 .matched-list li:not(:last-child)::after {
-  content: "·";
+  content: "|";
   margin-left: 10px;
   color: var(--muted);
 }
@@ -585,7 +631,7 @@ input {
   }
 }
 
-/* ── Transition animations ── */
+/* Transition animations */
 #content {
   opacity: 1;
   transform: translateY(0);
@@ -604,4 +650,66 @@ input {
 
 .page.switching {
   opacity: 0;
+}
+
+/* === Mode Selector (Fitting x Mode V1) === */
+
+.select-row {
+  margin: 12px 0;
+}
+
+.select-row select {
+  font-family: inherit;
+  font-size: 16px;
+  padding: 8px 32px 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  min-width: 180px;
+}
+
+.select-row select:focus {
+  outline: 2px solid var(--line);
+  outline-offset: 2px;
+}
+
+.mode-cards {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.mode-card {
+  border: 1px solid var(--soft);
+  padding: 14px 16px;
+  opacity: 0.55;
+  transition: opacity 160ms ease, border-color 160ms ease;
+}
+
+.mode-card.active {
+  border-color: var(--line);
+  opacity: 1;
+}
+
+.mode-card h4 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.mode-card p {
+  margin: 0 0 4px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.mode-card p.muted {
+  font-size: 13px;
+  margin-bottom: 0;
 }

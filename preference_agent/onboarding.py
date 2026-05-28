@@ -7,9 +7,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from .agent_rules import install_agent_rules
 from .agent_discovery import cold_start_scan, discovery_report
 from .capture_runner import CaptureConfig
 from .cold_start_summary import render_onboarding_summary
+from .kimi_hooks import install_kimi_hooks
 from .models import PreferenceRecord, now_iso
 from .paths import diagnostics
 from .store import MarkdownPreferenceStore
@@ -104,6 +106,10 @@ def run_onboarding(
     open_ui: bool = False,
     host: str = "127.0.0.1",
     port: int = 8080,
+    install_agent_rules_enabled: bool = True,
+    agent_rules_target: str | Path | None = None,
+    install_kimi_hooks_enabled: bool | None = None,
+    kimi_hooks_target: str | Path | None = None,
     progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     store = MarkdownPreferenceStore(store_path)
@@ -132,6 +138,22 @@ def run_onboarding(
         from .ui.server import open_preference_panel
 
         panel = open_preference_panel(store_path=store.path, host=host, port=port, open_browser=True)
+    agent_rules = None
+    if install_agent_rules_enabled and not dry_run:
+        agent_rules = install_agent_rules(target=agent_rules_target).to_dict()
+    kimi_hooks = None
+    should_install_kimi_hooks = (
+        agent_hint.strip().casefold() == "kimi"
+        if install_kimi_hooks_enabled is None
+        else install_kimi_hooks_enabled
+    )
+    if should_install_kimi_hooks and not dry_run:
+        kimi_hooks = install_kimi_hooks(
+            target=kimi_hooks_target,
+            agent=agent_hint or "kimi",
+            backend=backend or os.getenv("PREFERENCE_MODEL_BACKEND", "heuristic"),
+            store=store.path,
+        ).to_dict()
     after = get_onboarding_status(store.path, agent_hint=agent_hint, backend=backend).to_dict()
     result = {
         "ok": True,
@@ -143,6 +165,8 @@ def run_onboarding(
         "scan": scan,
         "after": after,
         "panel": panel,
+        "agent_rules": agent_rules,
+        "kimi_hooks": kimi_hooks,
     }
     result["summary_text"] = render_onboarding_summary(result)
     return result
@@ -178,19 +202,26 @@ def _next_steps(state: str, agent_hint: str = "") -> list[str]:
     if state == "not_initialized":
         return [
             f"Run `datailor onboard --agent {agent}` to create the preference store and scan discovered local histories.",
+            "Run `datailor integrate status --client all` to inspect IDE/client MCP setup.",
+            "Preview IDE/client setup with `datailor integrate install --client all --dry-run`.",
         ]
     if state == "needs_capture":
         return [
             f"Run `datailor onboard --agent {agent}` to start cold-start capture.",
             "Run `datailor ui` after capture to review the Manifesto.",
+            "Preview IDE/client setup with `datailor integrate install --client all --dry-run`.",
         ]
     if state == "empty_no_sources":
         return [
             "No supported local history source was found. Import a session with `datailor capture --source <path>`.",
+            "Run `datailor integrate status --client all` to inspect IDE/client MCP setup.",
+            "Preview IDE/client setup with `datailor integrate install --client all --dry-run`.",
         ]
     return [
         "Run `datailor ui` to review, confirm, reject, or correct preferences.",
         "Keep the MCP configured so agents can call `get_preference_decision` before acting.",
+        "Run `datailor integrate status --client all` to inspect IDE/client MCP setup.",
+        "Preview IDE/client setup with `datailor integrate install --client all --dry-run`.",
     ]
 
 
@@ -202,4 +233,6 @@ def _commands(agent_hint: str) -> dict[str, str]:
         "open_ui": "datailor ui",
         "mcp_config": f"datailor mcp-config --agent {agent}",
         "mcp_stdio": f"datailor-mcp --agent {agent}",
+        "integrate_status": "datailor integrate status --client all",
+        "integrate_preview": "datailor integrate install --client all --dry-run",
     }

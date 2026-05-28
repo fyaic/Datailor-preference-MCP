@@ -20,13 +20,13 @@ class RecallPipelineTests(unittest.TestCase):
         )
         candidates = engine.recall_batch(
             [
-                RecallInput(source="sample:1", content="回复短一点，少废话。"),
-                RecallInput(source="sample:2", content="今天北京天气怎么样？"),
+                RecallInput(source="sample:1", content="Keep replies shorter and less verbose."),
+                RecallInput(source="sample:2", content="What is the weather in Beijing today?"),
             ]
         )
         texts = "\n".join(item.content for item in candidates)
-        self.assertIn("回复短一点", texts)
-        self.assertNotIn("北京天气", texts)
+        self.assertIn("Keep replies shorter", texts)
+        self.assertNotIn("weather in Beijing", texts)
 
     def test_semantic_capture_job_keeps_single_markdown_output_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -35,8 +35,8 @@ class RecallPipelineTests(unittest.TestCase):
             source.write_text(
                 "\n".join(
                     [
-                        json.dumps({"role": "user", "content": "回复短一点，少废话。"}, ensure_ascii=False),
-                        json.dumps({"role": "user", "content": "今天北京天气怎么样？"}, ensure_ascii=False),
+                        json.dumps({"role": "user", "content": "Keep replies shorter and less verbose."}),
+                        json.dumps({"role": "user", "content": "What is the weather in Beijing today?"}),
                     ]
                 ),
                 encoding="utf-8",
@@ -45,7 +45,7 @@ class RecallPipelineTests(unittest.TestCase):
                 project_root=root,
                 candidate_dir=root / "data" / ".debug-capture",
                 checkpoint_dir=root / "data" / ".capture-state",
-                store_path=root / "data" / "个人偏好.md",
+                store_path=root / "data" / "personal-preferences.md",
                 mode="semantic-recall",
                 recall_strategy="multi",
                 recall_batch_size=2,
@@ -105,7 +105,7 @@ class RecallPipelineTests(unittest.TestCase):
                     "PREFERENCE_EMBEDDING_CACHE_PATH": str(Path(temp) / "cache.json"),
                 },
             ):
-                vectors = GLMEmbeddingBackend().embed_texts(["短一点", "先给我大纲"])
+                vectors = GLMEmbeddingBackend().embed_texts(["shorter", "outline first"])
         self.assertEqual(captured["url"], "https://open.bigmodel.cn/api/paas/v4/embeddings")
         self.assertEqual(captured["body"]["model"], "embedding-3")
         self.assertEqual(captured["body"]["dimensions"], 2)

@@ -8,6 +8,7 @@ dependencies = []
 [project.scripts]
 datailor = "preference_agent.cli:main"
 datailor-mcp = "preference_agent.mcp_server:main"
+datailor-kimi-hook = "preference_agent.kimi_hooks:main"
 
 [tool.setuptools.packages.find]
 include = ["preference_agent*"]

@@ -22,9 +22,9 @@ class InjectionLogTests(unittest.TestCase):
             MarkdownPreferenceStore(store).save(
                 [
                     PreferenceRecord(
-                        title="测试",
-                        applies_to="当 agent 修改代码后",
-                        preference="代码改动完成后默认运行相关测试。",
+                        title="Tests",
+                        applies_to="After the agent changes code",
+                        preference="After code changes, run relevant tests by default.",
                         status="active",
                         confidence="high",
                     )
@@ -32,7 +32,7 @@ class InjectionLogTests(unittest.TestCase):
             )
             engine = PreferenceEngine(MarkdownPreferenceStore(store), backend=HeuristicBackend())
 
-            decision = engine.decide("代码实现完成后准备回复用户", context={"session_id": "s1"}, agent="codex")
+            decision = engine.decide("Ready to reply to the user after completing code", context={"session_id": "s1"}, agent="codex")
             events = read_injection_log(store)
 
             self.assertEqual(decision["decision"], "apply")
@@ -49,9 +49,9 @@ class InjectionLogTests(unittest.TestCase):
             MarkdownPreferenceStore(store).save(
                 [
                     PreferenceRecord(
-                        title="测试",
-                        applies_to="当 agent 修改代码后",
-                        preference="代码改动完成后默认运行相关测试。",
+                        title="Tests",
+                        applies_to="After the agent changes code",
+                        preference="After code changes, run relevant tests by default.",
                         status="active",
                         confidence="high",
                     )
@@ -60,11 +60,11 @@ class InjectionLogTests(unittest.TestCase):
             engine = PreferenceEngine(MarkdownPreferenceStore(store), backend=HeuristicBackend())
             manager = PreferenceHookManager(engine, hooks_dir=root / ".hooks")
 
-            manager.on_session_start(agent="codex", session_id="s1", task="代码实现完成后准备回复用户")
-            manager.on_user_message(message="代码实现完成后准备回复用户", agent="codex", session_id="s1")
+            manager.on_session_start(agent="codex", session_id="s1", task="Ready to reply to the user after completing code")
+            manager.on_user_message(message="Ready to reply to the user after completing code", agent="codex", session_id="s1")
             manager.on_turn_complete(
-                user_message="以后默认先给结论。",
-                assistant_response="收到。",
+                user_message="From now on, give the conclusion first.",
+                assistant_response="Acknowledged.",
                 agent="codex",
                 session_id="s1",
             )
@@ -86,9 +86,9 @@ class InjectionLogTests(unittest.TestCase):
             MarkdownPreferenceStore(store).save(
                 [
                     PreferenceRecord(
-                        title="测试",
-                        applies_to="当 agent 修改代码后",
-                        preference="代码改动完成后默认运行相关测试。",
+                        title="Tests",
+                        applies_to="After the agent changes code",
+                        preference="After code changes, run relevant tests by default.",
                         status="active",
                         confidence="high",
                     )
@@ -103,7 +103,7 @@ class InjectionLogTests(unittest.TestCase):
                     "method": "tools/call",
                     "params": {
                         "name": "hook_session_start",
-                        "arguments": {"agent": "codex", "session_id": "s1", "task": "代码实现完成后准备回复用户"},
+                        "arguments": {"agent": "codex", "session_id": "s1", "task": "Ready to reply to the user after completing code"},
                     },
                 },
                 engine,
@@ -115,7 +115,7 @@ class InjectionLogTests(unittest.TestCase):
                     "method": "tools/call",
                     "params": {
                         "name": "hook_user_message",
-                        "arguments": {"agent": "codex", "session_id": "s1", "message": "代码实现完成后准备回复用户"},
+                        "arguments": {"agent": "codex", "session_id": "s1", "message": "Ready to reply to the user after completing code"},
                     },
                 },
                 engine,
@@ -133,16 +133,16 @@ class InjectionLogTests(unittest.TestCase):
             MarkdownPreferenceStore(store).save(
                 [
                     PreferenceRecord(
-                        title="测试",
-                        applies_to="当 agent 修改代码后",
-                        preference="代码改动完成后默认运行相关测试。",
+                        title="Tests",
+                        applies_to="After the agent changes code",
+                        preference="After code changes, run relevant tests by default.",
                         status="active",
                         confidence="high",
                     )
                 ]
             )
             engine = PreferenceEngine(MarkdownPreferenceStore(store), backend=HeuristicBackend())
-            engine.decide("代码实现完成后准备回复用户", agent="codex")
+            engine.decide("Ready to reply to the user after completing code", agent="codex")
 
             manifesto = build_manifesto(store_path=store)
 

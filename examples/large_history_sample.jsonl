@@ -1,8 +1,7 @@
-{"conversation_id":"s1","role":"assistant","content":"代码改完了，要不要跑测试？"}
-{"conversation_id":"s1","role":"user","content":"以后代码改动后默认要跑相关测试，不要每次问。"}
-{"conversation_id":"s1","role":"assistant","content":"我可以直接提交。"}
-{"conversation_id":"s1","role":"user","content":"不对，你应该先说明验证结果，再给最终回复。"}
-{"conversation_id":"s2","role":"user","content":"今天北京天气怎么样？"}
-{"conversation_id":"s2","role":"assistant","content":"这是一个普通问答。"}
-{"conversation_id":"s3","messages":[{"role":"assistant","content":"要不要整理文档？"},{"role":"user","content":"要。只要是方案设计和复杂问题拆解，就主动问我要不要沉淀成 Markdown。"}]}
-
+{"conversation_id":"s1","role":"assistant","content":"The code is changed. Should I run tests?"}
+{"conversation_id":"s1","role":"user","content":"From now on, run relevant tests by default after code changes; do not ask every time."}
+{"conversation_id":"s1","role":"assistant","content":"I can commit directly."}
+{"conversation_id":"s1","role":"user","content":"That is wrong. You should explain the verification result before the final reply."}
+{"conversation_id":"s2","role":"user","content":"What is the weather in Beijing today?"}
+{"conversation_id":"s2","role":"assistant","content":"This is an ordinary Q&A turn."}
+{"conversation_id":"s3","messages":[{"role":"assistant","content":"Should I write this down as documentation?"},{"role":"user","content":"Yes. For solution design and complex problem breakdowns, actively ask whether to save the conclusions as Markdown."}]}

@@ -4,19 +4,19 @@
 
 # Datailor Preference MCP
 
-Datailor 是本地优先的个人偏好代言系统 POC。它从历史会话和实时 hook 中提取长期、稳定、可复用的用户偏好，写入人类可读的 `个人偏好.md`，并通过 MCP、CLI 和本地 Manifesto UI 让 agent 在回复或执行前读取这些偏好。
+Datailor is a local-first personal preference MCP for AI agents. It extracts stable, reusable user preferences from chat history and runtime hooks, stores them in the human-readable `personal-preferences.md`, and exposes them through MCP tools, a CLI, an AGENTS managed block, and a local Manifesto UI.
 
-V0 的目标不是“记住一切”，而是验证一条可控链路：
+The V0 goal is not to remember everything. It validates a controlled workflow:
 
-- 冷启动时偏好库可以为空，不伪造用户偏好。
-- 只沉淀稳定、可复用、对未来 agent 行为有指导价值的偏好。
-- 过滤一次性任务、路径、URL、issue 编号、密钥、泛用假条件和用户原文照抄。
-- `个人偏好.md` 是唯一官方偏好源，Executive Summary 和 UI 都是派生视图。
-- 通过 MCP 工具、CLI、AGENTS managed block 和注入日志，把偏好真正接入 agent 工作流。
+- The preference store can start empty without inventing user preferences.
+- Only stable, reusable preferences that can guide future agent behavior are saved.
+- One-off tasks, paths, URLs, issue IDs, secrets, generic fake scopes, and copied raw user fragments are filtered out.
+- `personal-preferences.md` is the only canonical preference source; the Executive Summary and UI are derived views.
+- MCP tools, CLI commands, AGENTS rules, and injection logs connect preferences to real agent workflows.
 
-## 安装
+## Installation
 
-面向普通用户，推荐用 `pipx` 从 GitHub 安装。安装后 `datailor` 和 `datailor-mcp` 都会进入独立命令行环境，不依赖本地源码目录。
+For normal use, install from GitHub with `pipx`. After installation, `datailor` and `datailor-mcp` are available from an isolated command-line environment and do not depend on a local source checkout.
 
 ```powershell
 python -m pip install --user pipx
@@ -24,13 +24,13 @@ python -m pipx ensurepath
 pipx install git+https://github.com/fyaic/Datailor-preference-MCP.git
 ```
 
-检查安装：
+Check the installation:
 
 ```powershell
 datailor doctor --agent codex
 ```
 
-开发者安装：
+Developer install:
 
 ```powershell
 git clone https://github.com/fyaic/Datailor-preference-MCP.git datailor-preference-mcp
@@ -38,80 +38,103 @@ cd datailor-preference-mcp
 python -m pip install -e .
 ```
 
-升级和卸载：
+Upgrade or uninstall:
 
 ```powershell
 pipx upgrade datailor-preference-mcp
 pipx uninstall datailor-preference-mcp
 ```
 
-## 默认数据目录
+## Default Data Directory
 
-Datailor 默认把运行数据写到用户级目录，而不是仓库内的 `data\`。这让 pipx 安装、源码安装和 MCP 客户端调用都使用同一份偏好库。
+Datailor writes runtime data to a user-level data directory by default, not to the repository `data\` directory. This lets pipx installs, editable installs, and MCP clients share the same preference store.
 
-| 系统 | 默认目录 |
+| System | Default directory |
 | --- | --- |
 | Windows | `%APPDATA%\Datailor` |
 | macOS | `~/Library/Application Support/Datailor` |
 | Linux | `${XDG_DATA_HOME:-~/.local/share}/datailor` |
 
-默认官方偏好源：
+Default canonical preference store:
 
 ```text
-%APPDATA%\Datailor\个人偏好.md
+%APPDATA%\Datailor\personal-preferences.md
 ```
 
-可以用环境变量覆盖：
+Override with environment variables:
 
 ```powershell
 $env:DATAILOR_DATA_DIR = "D:\Datailor"
-$env:PREFERENCE_STORE_PATH = "D:\Datailor\个人偏好.md"
+$env:PREFERENCE_STORE_PATH = "D:\Datailor\personal-preferences.md"
 ```
 
-## 首次启动
+## First Run
 
-先看当前状态：
+Inspect the current state:
 
 ```powershell
 datailor doctor --agent codex
 ```
 
-冷启动扫描本地 agent 历史：
+Cold-start scan local agent histories:
 
 ```powershell
 datailor onboard --agent codex --mode recall-extract
 ```
 
-`onboard` 会创建默认 `个人偏好.md`、发现 Claude / Codex / Kimi 历史、按最近活跃和当前 agent 排序、执行增量扫描，并给出下一步命令。
+`onboard` creates the default `personal-preferences.md`, discovers Claude / Codex / Kimi histories, orders sources by recent activity and caller agent, runs incremental scanning, and installs a global `AGENTS.md` managed block so agents know when to call Datailor hooks.
 
-把 Datailor 调用规则写入全局 `AGENTS.md`：
+When `--agent kimi` is used, `onboard` also updates Kimi CLI lifecycle hooks in `~/.kimi/config.toml`: it comments out a top-level empty `hooks = []` entry and writes a Datailor-managed `[[hooks]]` block for `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`, `Stop`, and `SessionEnd`. Kimi can then call `datailor-kimi-hook` at lifecycle points. The AGENTS block remains a fallback constraint for clients that cannot inject hook output into the same model turn.
+
+The `AGENTS.md` write is transparent. Datailor only writes a short managed block between these markers and does not overwrite user-authored rules:
+
+```markdown
+<!-- datailor-preference:start -->
+# Datailor Personal Preference Agent
+...
+<!-- datailor-preference:end -->
+```
+
+That block instructs agents to call the corresponding MCP hook at session start, user-message arrival, turn completion, action execution, and session end; to record feedback through the feedback tool; and to open the UI Injection Log when the user asks whether preferences are active.
+
+Manual repair or reinstall:
 
 ```powershell
 datailor install-agent-rules
+datailor install-kimi-hooks --agent kimi
 ```
 
-打开本地 Manifesto UI：
+Disable automatic writes:
+
+```powershell
+datailor onboard --agent codex --no-agent-rules
+datailor onboard --agent kimi --no-kimi-hooks
+```
+
+Open the local Manifesto UI:
 
 ```powershell
 datailor ui
 ```
 
-`/preferences` 只是支持 MCP prompts 的客户端上的可选增强。Codex CLI、Kimi CLI 等通常只识别自己的命令系统，所以通用入口是 `datailor doctor`、`datailor onboard` 和 `datailor ui`。
+`/preferences` is only an optional enhancement for MCP clients that support prompts. Codex CLI, Kimi CLI, and similar clients usually use their own command systems, so the reliable entry points are `datailor doctor`, `datailor onboard`, and `datailor ui`.
 
-## MCP 配置
+## MCP Configuration
 
-生成当前 agent 的 MCP 配置：
+Generate MCP configuration for the current agent:
 
 ```powershell
 datailor mcp-config --agent codex
 ```
 
-输出示例：
+`mcp-config` installs the same `AGENTS.md` managed block by default. With `--agent kimi`, it also installs Kimi CLI hooks. To keep stdout directly pasteable into MCP config files, stdout contains only MCP JSON; AGENTS/Kimi target paths, actions, and markers are printed to stderr.
+
+Example output:
 
 ```json
 {
   "mcpServers": {
-    "datailor-preference": {
+    "datailor-preferences": {
       "command": "datailor-mcp",
       "args": ["--agent", "codex"],
       "env": {
@@ -122,55 +145,119 @@ datailor mcp-config --agent codex
 }
 ```
 
-如果你显式传入 `--store`，生成结果会包含 `PREFERENCE_STORE_PATH`：
+If `--store` is provided, the generated config includes `PREFERENCE_STORE_PATH`:
 
 ```powershell
-datailor mcp-config --agent kimi --store "D:\Datailor\个人偏好.md"
+datailor mcp-config --agent kimi --store "D:\Datailor\personal-preferences.md"
 ```
 
-源码开发时也推荐使用 `datailor-mcp`，不要让 MCP 配置绑定仓库 `cwd` 或 `python -m preference_agent.mcp_server`。
+Source development should still use `datailor-mcp`; do not bind MCP config to a repository `cwd` or to `python -m preference_agent.mcp_server`.
 
-## 冷启动扫描
+Print only MCP JSON without writing `AGENTS.md`:
 
-独立运行冷启动扫描：
+```powershell
+datailor mcp-config --agent codex --no-agent-rules
+datailor mcp-config --agent kimi --no-agent-rules --no-kimi-hooks
+```
+
+Kimi hook commands observe lifecycle events and write Datailor injection logs / turn buffers. Current Kimi CLI shell hook responses only support allow/block decisions, so they cannot directly inject `agent_instruction` into the same model turn. The AGENTS managed block still tells the agent to read and apply preferences before replying.
+
+## IDE / Client Integration
+
+`mcp-config` only prints copyable MCP JSON. To write Datailor into Codex, Claude Code, or Kimi Code client config files, use the explicit `integrate` command:
+
+```powershell
+datailor integrate status --client all
+datailor integrate install --client codex --dry-run
+datailor integrate install --client codex
+datailor integrate doctor --client all
+datailor integrate remove --client codex
+```
+
+`integrate` writes transparently:
+
+- `status` / `doctor` do not write files.
+- `install --dry-run` shows the planned change without writing config or creating backups.
+- `export-plugin --dry-run` reports the destination and whether an existing directory would be replaced, without creating directories or deleting existing output.
+- `install` backs up existing config files before writing and remains idempotent.
+- `remove` only removes the Datailor managed entry and leaves other MCP servers untouched.
+- The default server name matches `mcp-config`: `datailor-preferences`.
+- If `--scope` is omitted, each client uses its profile default: Codex/Kimi use `user`; Claude Code uses `project`.
+
+Current client targets:
+
+| Client | Default write target | Scope notes |
+| --- | --- | --- |
+| Codex | `[mcp_servers.datailor-preferences]` in `~/.codex/config.toml` | `--scope project` writes `.codex/config.toml` in the current project; Codex only loads project config for trusted projects. |
+| Claude Code | `.mcp.json` in the current project | `user` / `local` scope writes `~/.claude.json`; project scope is easier to review. |
+| Kimi Code | `mcpServers.datailor-preferences` in `~/.kimi/mcp.json` | Kimi CLI stores MCP config at user scope; project scope maps to user config and emits a warning. |
+
+When `--store` is explicit, the written MCP environment includes `PREFERENCE_STORE_PATH`:
+
+```powershell
+datailor --store "D:\Datailor\personal-preferences.md" integrate install --client kimi
+```
+
+`onboard` does not modify every IDE/client config by default. To install a client during first run, pass it explicitly:
+
+```powershell
+datailor onboard --agent codex --integrate-client codex
+datailor onboard --agent claude --integrate-client claude --integrate-scope project
+```
+
+`doctor`, `onboard`, and `cold-start-scan` next steps point users to `datailor integrate status --client all` and `datailor integrate install --client all --dry-run` so IDE/client integration is discoverable.
+
+Plugin templates can be exported to a local directory and then installed or inspected through each client's official workflow:
+
+```powershell
+datailor integrate export-plugin --client codex --output .\datailor-plugins
+datailor integrate export-plugin --client claude --output .\datailor-plugins
+datailor integrate export-plugin --client kimi --output .\datailor-plugins
+```
+
+Exported templates stay short: Datailor MCP config, common CLI entry points, and preference hook rules. Codex and Claude Code templates include `.mcp.json` and a skill. The Kimi template includes `plugin.json`, `SKILL.md`, and a small command wrapper. The wrapper command uses the current Python interpreter and an absolute script path, then calls Datailor through `python -m preference_agent.cli`; it does not depend on Kimi's working directory or on `datailor` being on PATH. Actual plugin loading behavior still depends on each client's current official plugin flow.
+
+## Cold-Start Scan
+
+Run a standalone cold-start scan:
 
 ```powershell
 datailor cold-start-scan --agent codex --mode recall-extract
 ```
 
-默认输出面向人类，会实时显示发现了哪些 sources、正在扫描哪个 source、候选数、新增数、合并数、冲突数和跳过原因。自动化脚本使用 JSON：
+The default output is human-readable and streams discovered sources, the current source being scanned, candidate counts, added/merged/conflict counts, and skipped reasons. Use JSON for automation:
 
 ```powershell
 datailor cold-start-scan --agent codex --mode recall-extract --json
 ```
 
-只看最终状态：
+Show only the final state:
 
 ```powershell
 datailor cold-start-scan --agent codex --quiet
 ```
 
-支持参数：
+Useful flags:
 
-- `--dry-run`：只演练，不写入偏好库。
-- `--max-files`：调试或应急时限制文件数，默认不限制。
-- `--max-minutes`：限制单个 source 的运行时间，默认不限制。
+- `--dry-run`: preview only; do not write to the preference store.
+- `--max-files`: limit file count for debugging or emergency runs; default is unlimited.
+- `--max-minutes`: limit runtime per source; default is unlimited.
 
-## Fitting 离线整理
+## Fitting
 
-`fitting` 用来做 review-first 的离线整理：它会读取当前偏好库和可选历史源，按自然语言 instructions 提取长期模式、生成 memory rot 建议，并写出一份 Fitting Report。默认不会覆盖 `个人偏好.md`。
+`fitting` performs offline consolidation. It reads the current preference store and optional history sources, extracts long-term patterns from natural-language instructions, generates memory-rot suggestions, and writes a Fitting Report. The default mode is `curate`: generate a review plan without directly overwriting `personal-preferences.md`.
 
 ```powershell
 datailor fitting --agent codex --instructions "focus on UI writing preferences; ignore one-off install commands"
 ```
 
-扫描指定历史源：
+Scan a specific history source:
 
 ```powershell
 datailor fitting --source "C:\path\to\history.jsonl" --instructions-file ".\fitting-instructions.txt"
 ```
 
-查看和应用：
+Inspect and apply:
 
 ```powershell
 datailor fitting-list
@@ -178,19 +265,43 @@ datailor fitting-show fitting-20260527-173000 --report
 datailor fitting-apply fitting-20260527-173000 --accept chg-001
 ```
 
-Fitting 会生成本地 artifacts：
+Auto mode only applies low-risk, high-confidence `preference` changes. Workflow, error pattern, memory-rot, and other complex changes stay in the report and plan.
 
-- `report.md`：给用户审查的 Fitting Report。
-- `result.json`：给 CLI/MCP/UI 使用的结构化结果。
-- `draft-insights.jsonl`：preference、workflow、error_pattern、tool_quirk 等候选模式。
-- `rot-suggestions.jsonl`：重复、覆盖、冲突、过时、负反馈压低等清理建议。
-- `apply-plan.json`：可显式接受的变更计划。
+```powershell
+datailor fitting --auto-apply --agent codex
+```
 
-MCP 也提供 `start_fitting`、`get_fitting_status` 和 `apply_fitting_plan`，供 agent 在不依赖 `/preferences` 的情况下启动和查看 Fitting 任务。
+Fitting writes local artifacts:
 
-## 真实捕获
+- `report.md`: human review report.
+- `result.json`: structured result for CLI/MCP/UI.
+- `draft-insights.jsonl`: candidate `preference`, `workflow`, `error_pattern`, `tool_quirk`, and related patterns.
+- `rot-suggestions.jsonl`: duplicate, overlap, conflict, stale, and negative-feedback suggestions.
+- `apply-plan.json`: explicitly acceptable change plan.
 
-正式捕获不建议用 `recall-only` 写库。`recall-only` 只适合离线单测和排查召回问题。真实捕获优先使用 `recall-extract` 或 `semantic-extract`。
+Fitting is integrated with the Mode system:
+
+| Mode | Behavior |
+| --- | --- |
+| `curate` | Default review mode. Hooks can trigger Fitting after thresholds are met, but only a `pending_review` plan is generated; the user must accept changes through UI, CLI, or MCP. |
+| `auto` | Automatic mode. Hooks can trigger Fitting after thresholds are met and automatically apply high-confidence, low-risk preference changes. |
+
+Trigger conditions are controlled by environment variables:
+
+| Variable | Default | Description |
+| --- | ---: | --- |
+| `PREFERENCE_FITTING_AUTO` | `1` | Master switch for automatic Fitting triggers |
+| `PREFERENCE_FITTING_TRIGGER_RECORDS` | `5` | New/changed preference record threshold |
+| `PREFERENCE_FITTING_TRIGGER_DAYS` | `7` | Days since last Fitting threshold |
+| `PREFERENCE_FITTING_COOLDOWN_MINUTES` | `60` | Automatic trigger cooldown |
+| `PREFERENCE_FITTING_MAX_FILES` | `0` | Max auto-discovered history files; `0` means unlimited |
+| `PREFERENCE_FITTING_MAX_MINUTES` | `0` | Reserved runtime limit; `0` means unlimited |
+
+MCP also exposes `start_fitting`, `get_fitting_status`, and `apply_fitting_plan`. `start_fitting` supports `mode: "auto" | "curate"` and `auto_apply: true`. Note that `mode: "auto"` itself means auto-apply high-confidence, low-risk preferences even when `auto_apply: false` is also passed; use `mode: "curate"` or omit `mode` to generate only a review plan.
+
+## Real Capture
+
+Production capture should not use `recall-only` to write the store. `recall-only` is for offline tests and recall debugging. Real capture should use `recall-extract` or `semantic-extract`.
 
 ```powershell
 $env:PREFERENCE_CAPTURE_MODE = "recall-extract"
@@ -198,13 +309,13 @@ $env:PREFERENCE_CAPTURE_AGENT_RULES = "0"
 datailor capture-job --source "C:\path\to\history.jsonl" --max-minutes 10
 ```
 
-长跑可以反复执行同一命令。runner 会使用用户数据目录下的 `.capture-state\*.checkpoint.json` 断点恢复，只有候选完成精提并写库后才推进 checkpoint，避免中断后漏提取。
+Long-running captures can be repeated safely. The runner uses `.capture-state\*.checkpoint.json` under the user data directory and only advances checkpoints after candidates are refined and written, so interrupted runs do not silently skip data.
 
-Kimi Code 的 `user-history` JSONL 常见格式是只有 `content` 字段、没有 `role` 字段。Datailor 会把这种 content-only JSONL 按用户输入处理。
+Kimi Code `user-history` JSONL often contains only a `content` field and no `role` field. Datailor treats content-only JSONL as user input.
 
-## 模型配置
+## Model Configuration
 
-默认后端是 `heuristic`，不依赖 API。接云模型或本地模型时使用 OpenAI-compatible 配置：
+The default backend is `heuristic` and does not require an API. Use OpenAI-compatible settings for cloud or local models:
 
 ```powershell
 $env:PREFERENCE_MODEL_BACKEND = "openai-compatible"
@@ -213,7 +324,7 @@ $env:PREFERENCE_MODEL_API_KEY = "local"
 $env:PREFERENCE_MODEL_NAME = "qwen2.5:7b"
 ```
 
-云模型示例：
+Cloud model example:
 
 ```powershell
 $env:PREFERENCE_MODEL_BACKEND = "openai-compatible"
@@ -222,7 +333,7 @@ $env:PREFERENCE_MODEL_API_KEY = "replace-me"
 $env:PREFERENCE_MODEL_NAME = "Kimi-K2.5"
 ```
 
-Embedding 可选，用于语义召回：
+Optional embeddings for semantic recall:
 
 ```powershell
 $env:PREFERENCE_EMBEDDING_BACKEND = "glm"
@@ -231,90 +342,94 @@ $env:PREFERENCE_EMBEDDING_API_KEY = "replace-me"
 $env:PREFERENCE_EMBEDDING_MODEL = "embedding-3"
 ```
 
-不要提交 `.env.local` 或任何 API key。
+Do not commit `.env.local` or any API key.
 
-## 本地 UI
+## Local UI
 
 ```powershell
 datailor ui --no-open
 ```
 
-默认地址：
+Default address:
 
 ```text
 http://127.0.0.1:8080
 ```
 
-UI 只绑定 localhost。它读取官方 `个人偏好.md`，展示：
+The UI binds to localhost only. It reads the canonical `personal-preferences.md` and displays:
 
-- **Dashboard**：active / pending / conflict / feedback 统计与 Executive Summary
-- **Manifesto**：完整偏好列表（active / pending / conflict / feedback）
-- **Injection Log**：每次偏好注入的时间线——命中了哪些偏好、生成了什么 `agent_instruction`、是否真正注入
-- **冲突 A/B 对比**：左右分栏查看冲突双方
-- **反馈入口**：Confirm / Reject / Correct
-- **中英文切换**
+- **Dashboard**: active / pending / conflict / feedback counts and Executive Summary
+- **Manifesto**: full preference list
+- **Injection Log**: preference injection timeline, matched preferences, generated `agent_instruction`, and injection status
+- **Conflict A/B**: side-by-side conflict comparison
+- **Feedback**: Confirm / Reject / Correct
+- **Fitting**: latest Fitting Report, pending change counts, Accept Selected / Accept All / Reject All in `curate` mode
+- **Settings**: switch between `curate` and `auto`
 
-所有 `decide` / hook / prewarm 调用都会写入 `.injection-log.jsonl`，Injection Log 标签页将其解析为可读时间线，用于验证偏好是否真的进入 agent 工作流。
+All `decide` / hook / prewarm calls write `.injection-log.jsonl`. The Injection Log tab parses that file into a readable timeline so users can verify that preferences entered the agent workflow.
 
-UI 反馈会真实修改官方偏好源：
+UI feedback modifies the canonical preference store:
 
-- Confirm：把待观察偏好提升为 `active`。
-- Reject：从 `个人偏好.md` 中移除该偏好。
-- Correct：用用户输入改写偏好文本并标记为已确认。
+- Confirm: promote a pending preference to `active`.
+- Reject: remove the preference from `personal-preferences.md`.
+- Correct: rewrite the preference text from user input and mark it active.
 
-每次覆盖 Markdown store 前会自动生成快照，变更后会刷新 Executive Summary。feedback JSONL 只作为审计和演化记录。
+Before overwriting the Markdown store, Datailor creates a snapshot. After changes, it refreshes the Executive Summary. Feedback JSONL is only an audit and evolution log.
 
-## 注入与可观测性
+## Injection And Observability
 
-MCP 暴露了偏好决策、冷启动、捕获、反馈、hook、冲突处理和 UI 打开工具。完整工具列表：
+MCP exposes preference decisions, cold-start capture, feedback, hooks, conflict resolution, and UI launching tools.
 
-| 工具 | 说明 |
-|------|------|
-| `get_onboarding_status` | 检查首次配置状态 |
-| `get_preference_decision` | 在 agent 行动前读取用户偏好 |
-| `start_cold_start_capture` | 启动冷启动捕获（等价于 CLI `onboard`） |
-| `capture_preferences_from_session` | 从指定 session 文件捕获偏好 |
-| `discover_agents` | 检测本机已安装的 agent 历史源 |
-| `prewarm_preferences` | 预热 session 级偏好缓存 |
-| `hook_session_start` | H1：session 开始 hook |
-| `hook_user_message` | H2：用户消息到达 hook |
-| `hook_turn_complete` | H3：turn 完成 hook |
-| `hook_action_executed` | H4：行为信号 hook |
-| `hook_session_end` | H5：session 结束 hook |
-| `sync_preference_injection` | 生成静态规则并同步到 AGENTS.md |
-| `report_preference_feedback` | 记录用户反馈（确认/纠正/拒绝/使用） |
-| `resolve_preference_conflict` | 标记冲突已解决并更新偏好状态 |
-| `open_preference_panel` | 打开本地 Manifesto UI 面板 |
+| Tool | Description |
+| --- | --- |
+| `get_onboarding_status` | Check first-run setup status |
+| `get_preference_decision` | Read user preferences before an agent acts |
+| `start_cold_start_capture` | Start cold-start capture, equivalent to CLI `onboard` capture flow |
+| `capture_preferences_from_session` | Capture preferences from a specific session file |
+| `discover_agents` | Detect installed local agent history sources |
+| `prewarm_preferences` | Prewarm session-level preference cache |
+| `hook_session_start` | H1 session-start hook |
+| `hook_user_message` | H2 user-message hook |
+| `hook_turn_complete` | H3 turn-complete hook |
+| `hook_action_executed` | H4 behavior-signal hook |
+| `hook_session_end` | H5 session-end hook |
+| `sync_preference_injection` | Generate static rules and sync them to AGENTS.md |
+| `report_preference_feedback` | Record user feedback: confirmation, correction, rejection, or usage |
+| `resolve_preference_conflict` | Mark a conflict resolved and update preference state |
+| `open_preference_panel` | Open the local Manifesto UI |
+| `start_fitting` | Start a Fitting job in `curate` or `auto` mode |
+| `get_fitting_status` | Read latest or specified Fitting job status |
+| `apply_fitting_plan` | Apply explicitly accepted Fitting changes |
 
-所有 `decide` / hook / prewarm 调用都会写入注入日志。Manifesto UI 的 Injection Log 会展示时间、agent、session、命中的偏好和实际注入的 `agent_instruction`，用于验证偏好是否真的进入 agent 工作流。
+All `decide` / hook / prewarm calls write injection logs. The Manifesto UI Injection Log shows time, agent, session, matched preferences, and the actual injected `agent_instruction`.
 
-静态注入产物可以手动同步：
+Static injection artifacts can be generated manually:
 
 ```powershell
 datailor sync-injection
-datailor prewarm --agent codex --task "代码实现完成后准备回复用户"
+datailor prewarm --agent codex --task "prepare a final reply after code implementation"
 ```
 
-这些产物是生成视图，不是新的偏好源。唯一官方源仍然是 `个人偏好.md`。
+These artifacts are generated views, not a new preference source. The only canonical source remains `personal-preferences.md`.
 
-## 冲突处理
+## Conflict Handling
 
-`decide` 在返回 agent 指令前会检查本轮命中的 active 偏好是否互相冲突。如果冲突不能同时成立，系统不会把矛盾规则拼接给 agent，而是返回 `decision=escalate`，要求 agent 简短反问用户本次采用哪条偏好，或是否两条都不适用。
+Before returning an agent instruction, `decide` checks whether matched active preferences conflict. If they cannot all apply at once, Datailor returns `decision=escalate` instead of concatenating contradictory rules. The agent should briefly ask the user which preference applies for this turn, or whether neither applies.
 
-Datailor 会记录已询问的冲突组合，并按冷却时间避免同一个冲突反复问。用户回答后，agent 调用 `resolve_preference_conflict` 更新偏好状态并标记该冲突已处理。
+Datailor records asked conflict combinations and uses a cooldown to avoid repeatedly asking about the same conflict. After the user answers, the agent calls `resolve_preference_conflict` to update preference state and mark the conflict handled.
 
-## 版本与恢复
+## Versioning And Recovery
 
 ```powershell
 datailor snapshots
 datailor restore-snapshot --snapshot "C:\path\to\.snapshots\20260525-120000-000000-pre-save.md"
 ```
 
-`个人偏好.md` 仍然是唯一官方偏好源；自动快照只用于恢复。默认每次覆盖已存在的 Markdown store 前，系统会在同目录的 `.snapshots\` 下保存一份旧版本。
+`personal-preferences.md` is the only canonical preference source. Automatic snapshots are only for recovery. By default, every overwrite of an existing Markdown store saves the previous version under `.snapshots\` next to the store.
 
-## 数据与隐私
+## Data And Privacy
 
-仓库默认忽略运行态数据和本地配置：
+The repository ignores runtime data and local config by default:
 
 - `.env.local`
 - `data\`
@@ -327,12 +442,12 @@ datailor restore-snapshot --snapshot "C:\path\to\.snapshots\20260525-120000-0000
 - `.summary\`
 - `.ui\`
 
-真实偏好、历史会话、debug 输出和 API key 不应提交到 Git。代码层在写入前会清理常见密钥形状和替换字符。
+Real preferences, chat history, debug output, and API keys should not be committed. Code paths redact common secret shapes and replacement characters before writing.
 
-## 测试
+## Tests
 
 ```powershell
 python -m pytest -q
 ```
 
-当前回归：`76 passed`。
+Current regression: `112 passed`.

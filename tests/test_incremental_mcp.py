@@ -22,7 +22,7 @@ class IncrementalMcpTests(unittest.TestCase):
             source = root / "sessions"
             source.mkdir()
             session = source / "one.jsonl"
-            session.write_text(json.dumps({"role": "user", "content": "以后默认先给我大纲。"}, ensure_ascii=False), encoding="utf-8")
+            session.write_text(json.dumps({"role": "user", "content": "From now on, give me an outline first."}), encoding="utf-8")
             config = CaptureConfig(
                 project_root=root,
                 candidate_dir=root / "debug",
@@ -40,7 +40,7 @@ class IncrementalMcpTests(unittest.TestCase):
             root = Path(temp)
             store = root / "prefs.md"
             store.write_text(
-                "# 个人偏好\n\n## 已确认偏好\n\n- 当 agent 修改代码后，默认运行相关测试。\n\n## 待观察偏好\n\n暂无待观察偏好。\n",
+                "# Personal Preferences\n\n## Active Preferences\n\n- After the agent changes code, run relevant tests by default.\n\n## Observed Preferences\n\nNo observed preferences yet.\n",
                 encoding="utf-8",
             )
             engine = PreferenceEngine(MarkdownPreferenceStore(store))
@@ -57,7 +57,7 @@ class IncrementalMcpTests(unittest.TestCase):
                         "name": "prewarm_preferences",
                         "arguments": {
                             "agent": "codex",
-                            "task": "代码写完后准备回复",
+                            "task": "Ready to reply after finishing code",
                             "output_dir": str(root / "inject"),
                         },
                     },
@@ -75,8 +75,8 @@ class IncrementalMcpTests(unittest.TestCase):
                         "name": "report_preference_feedback",
                         "arguments": {
                             "feedback_type": "confirmation",
-                            "user_feedback": "对，就是这样。",
-                            "preference_text": "默认运行相关测试",
+                            "user_feedback": "Yes, exactly.",
+                            "preference_text": "run relevant tests by default",
                         },
                     },
                 },
@@ -90,7 +90,7 @@ class IncrementalMcpTests(unittest.TestCase):
             root = Path(temp)
             store = root / "prefs.md"
             store.write_text(
-                "# 个人偏好\n\n## 已确认偏好\n\n暂无已确认偏好。\n\n## 待观察偏好\n\n- 默认先给大纲。\n",
+                "# Personal Preferences\n\n## Active Preferences\n\nNo active preferences yet.\n\n## Observed Preferences\n\n- Give the outline first by default.\n",
                 encoding="utf-8",
             )
             engine = PreferenceEngine(MarkdownPreferenceStore(store))
@@ -105,7 +105,7 @@ class IncrementalMcpTests(unittest.TestCase):
                         "name": "report_preference_feedback",
                         "arguments": {
                             "feedback_type": "confirmation",
-                            "user_feedback": "对，就是这样。",
+                            "user_feedback": "Yes, exactly.",
                             "preference_id": item.id,
                             "preference_text": item.preference,
                         },
@@ -153,7 +153,7 @@ class IncrementalMcpTests(unittest.TestCase):
             history = home / ".claude" / "history.jsonl"
             history.parent.mkdir(parents=True)
             history.write_text(
-                json.dumps({"role": "user", "content": "以后默认先给结论。"}, ensure_ascii=False) + "\n",
+                json.dumps({"role": "user", "content": "From now on, give the conclusion first."}) + "\n",
                 encoding="utf-8",
             )
             with patch.dict(
@@ -204,7 +204,7 @@ class IncrementalMcpTests(unittest.TestCase):
             history = home / ".codex" / "history.jsonl"
             history.parent.mkdir(parents=True)
             history.write_text(
-                json.dumps({"role": "user", "content": "以后默认先给结论。"}, ensure_ascii=False) + "\n",
+                json.dumps({"role": "user", "content": "From now on, give the conclusion first."}) + "\n",
                 encoding="utf-8",
             )
             with patch.dict(
@@ -227,7 +227,7 @@ class IncrementalMcpTests(unittest.TestCase):
                         "method": "tools/call",
                         "params": {
                             "name": "get_preference_decision",
-                            "arguments": {"agent": "codex", "task": "准备回复用户"},
+                            "arguments": {"agent": "codex", "task": "Ready to reply to the user"},
                         },
                     },
                     engine,

@@ -324,13 +324,13 @@ class FittingJobResult:
 def _parse_instruction_lists(text: str) -> tuple[list[str], list[str]]:
     focus: list[str] = []
     ignore: list[str] = []
-    parts = [part.strip(" .。；;") for part in re.split(r"[;；\n]+", text) if part.strip()]
+    parts = [part.strip(" .;") for part in re.split(r"[;\n]+", text) if part.strip()]
     for part in parts:
         lowered = part.casefold()
-        if lowered.startswith(("focus on ", "focus ", "关注", "重点关注")):
-            focus.append(_strip_instruction_prefix(part, ("focus on", "focus", "关注", "重点关注")))
-        elif lowered.startswith(("ignore ", "忽略", "不要关注", "不看")):
-            ignore.append(_strip_instruction_prefix(part, ("ignore", "忽略", "不要关注", "不看")))
+        if lowered.startswith(("focus on ", "focus ")):
+            focus.append(_strip_instruction_prefix(part, ("focus on", "focus")))
+        elif lowered.startswith(("ignore ",)):
+            ignore.append(_strip_instruction_prefix(part, ("ignore",)))
     return unique_strings(focus), unique_strings(ignore)
 
 
@@ -339,7 +339,7 @@ def _strip_instruction_prefix(text: str, prefixes: tuple[str, ...]) -> str:
     lowered = stripped.casefold()
     for prefix in prefixes:
         if lowered.startswith(prefix.casefold()):
-            return stripped[len(prefix) :].strip(" :：,，")
+            return stripped[len(prefix) :].strip(" :,")
     return stripped
 
 
@@ -349,7 +349,7 @@ def _instruction_phrase_matches(phrase: str, blob: str) -> bool:
         return False
     if normalized in blob:
         return True
-    tokens = [token for token in re.split(r"[^0-9a-zA-Z\u4e00-\u9fff]+", normalized) if len(token) >= 2]
+    tokens = [token for token in re.split(r"[^0-9a-zA-Z]+", normalized) if len(token) >= 4]
     if not tokens:
         return False
     return any(token in blob for token in tokens)

@@ -98,8 +98,13 @@ const i18n = {
       configuredMode: "Configured mode",
       effectiveMode: "Effective mode",
       auto: "Auto",
-      autonomous: "Autonomous Trust",
-      curated: "Curated Autonomy",
+      curate: "Curate",
+      modeAutoTitle: "Auto Mode",
+      modeAutoDesc: "Fitting runs automatically and high-confidence preferences are applied without review. Workflows and rot suggestions are logged but not auto-written.",
+      modeAutoFor: "Best for: users who trust the system and prefer efficiency.",
+      modeCurateTitle: "Curate Mode (Recommended)",
+      modeCurateDesc: "Fitting runs automatically but only generates a plan. You must review and accept changes before they are written to your preference store.",
+      modeCurateFor: "Best for: cautious users. This is the default.",
       theme: "Theme",
       light: "Light",
       dark: "Dark",
@@ -109,106 +114,111 @@ const i18n = {
     }
   },
   zh: {
-    appTitle: "个人偏好画像",
-    summaryTitle: "1.1 执行摘要",
-    search: "搜索",
-    source: "来源",
+    appTitle: "Personal Preference Manifesto",
+    summaryTitle: "1.1 Executive Summary",
+    search: "Search",
+    source: "Source",
     tabs: {
-      all: "全部",
-      pending: "待确认",
-      conflicts: "冲突",
-      evolution: "演化",
+      all: "All",
+      pending: "Pending",
+      conflicts: "Conflicts",
+      evolution: "Evolution",
       fitting: "Fitting",
-      injection: "注入日志",
-      settings: "设置"
+      injection: "Injection",
+      settings: "Settings"
     },
     titles: {
-      all: "1.2 高频偏好",
-      pending: "1.3 待确认偏好",
-      conflicts: "1.4 冲突对比",
-      evolution: "1.5 偏好演化",
-      fitting: "1.6 Fitting 报告",
-      injection: "1.7 注入日志",
-      settings: "1.8 设置"
+      all: "1.2 High-Frequency Preferences",
+      pending: "1.3 Pending Confirmation",
+      conflicts: "1.4 Conflict Review",
+      evolution: "1.5 Evolution",
+      fitting: "1.6 Fitting Report",
+      injection: "1.7 Injection Log",
+      settings: "1.8 Settings"
     },
     summary: {
-      active: "已生效偏好",
-      pending: "待确认偏好",
-      conflicts: "待解决冲突",
-      mode: "当前模式"
+      active: "Active preferences",
+      pending: "Pending confirmation",
+      conflicts: "Conflicts awaiting resolution",
+      mode: "Effective mode"
     },
     empty: {
-      section: "本分区暂无记录。",
-      profile: "还没有生成稳定的个人画像。请先捕获偏好，之后这里会总结系统当前对用户的理解。",
-      conflicts: "未检测到 A/B 冲突。待确认内容仍可在“待确认”页查看。",
-      feedback: "还没有记录反馈。",
-      fitting: "还没有生成 Fitting 报告。",
-      injection: "还没有注入事件。启动 session 或调用 get_preference_decision 后，这里会显示注入时间线。",
-      missingSide: "缺少对比项。"
+      section: "No records in this section.",
+      profile: "No stable personal profile has been generated yet. Capture preferences first, then this section will summarize what the system understands about the user.",
+      conflicts: "No A/B conflicts were detected. Pending items remain available in the Pending tab.",
+      feedback: "No feedback has been recorded.",
+      fitting: "No Fitting report has been generated yet.",
+      injection: "No injection events have been recorded yet. Start a session or call get_preference_decision to populate this timeline.",
+      missingSide: "Missing side."
     },
     table: {
-      preference: "偏好",
-      frequency: "频次",
-      sessions: "会话",
-      confidence: "置信度",
-      liveConfidence: "动态",
-      status: "状态"
+      preference: "Preference",
+      frequency: "Freq.",
+      sessions: "Sessions",
+      confidence: "Conf.",
+      liveConfidence: "Live",
+      status: "Status"
     },
     detail: {
-      statement: "陈述",
-      theorem: "注意。",
-      definition: "证据。",
-      liveConfidence: "动态置信度。",
-      factors: "因子。",
-      evidence: "证据。",
-      noEvidence: "Markdown 视图中没有保存证据。",
-      confirm: "确认",
-      reject: "拒绝",
-      correct: "纠正",
-      correctionPrompt: "纠正内容",
-      actionFailed: "反馈已记录，但偏好库未更新。"
+      statement: "Statement",
+      theorem: "Theorem.",
+      definition: "Definition.",
+      liveConfidence: "Live confidence.",
+      factors: "Factors.",
+      evidence: "Evidence.",
+      noEvidence: "No stored evidence in the Markdown view.",
+      confirm: "Confirm",
+      reject: "Reject",
+      correct: "Correct",
+      correctionPrompt: "Correction",
+      actionFailed: "The feedback was recorded, but the preference store was not updated."
     },
     conflict: {
-      similarity: "相似度",
-      reviewRequired: "需要人工确认。",
-      confidence: "置信度",
-      scope: "适用场景",
-      notSpecified: "未指定"
+      similarity: "Similarity",
+      reviewRequired: "Review required.",
+      confidence: "Confidence",
+      scope: "Scope",
+      notSpecified: "Not specified"
     },
     evolution: {
-      preference: "偏好",
-      use: "使用",
-      confirm: "确认",
-      correct: "纠正",
-      reject: "拒绝",
-      recommendation: "建议"
+      preference: "Preference",
+      use: "Use",
+      confirm: "Confirm",
+      correct: "Correct",
+      reject: "Reject",
+      recommendation: "Recommendation"
     },
     injection: {
-      time: "时间",
+      time: "Time",
       hook: "Hook",
       agent: "Agent",
       session: "Session",
-      decision: "决策",
-      matched: "命中",
-      instruction: "注入指令",
-      injected: "已注入",
-      reason: "原因",
-      yes: "是",
-      no: "否"
+      decision: "Decision",
+      matched: "Matched",
+      instruction: "Instruction",
+      injected: "Injected",
+      reason: "Reason",
+      yes: "Yes",
+      no: "No"
     },
     settings: {
-      userMode: "用户模式",
-      configuredMode: "配置模式",
-      effectiveMode: "当前模式",
-      auto: "自动",
-      autonomous: "自主信任",
-      curated: "审慎自主",
-      theme: "主题",
-      light: "浅色",
-      dark: "深色",
-      language: "语言",
-      english: "英文",
-      chinese: "中文"
+      userMode: "User Mode",
+      configuredMode: "Configured mode",
+      effectiveMode: "Effective mode",
+      auto: "Auto",
+      curate: "Curate",
+      modeAutoTitle: "Auto Mode",
+      modeAutoDesc: "Fitting runs automatically and high-confidence preferences are applied without review. Workflows and rot suggestions are logged but not auto-written.",
+      modeAutoFor: "Best for: users who trust the system and prefer efficiency.",
+      modeCurateTitle: "Curate Mode (Recommended)",
+      modeCurateDesc: "Fitting runs automatically but only generates a plan. You must review and accept changes before they are written to your preference store.",
+      modeCurateFor: "Best for: cautious users. This is the default.",
+      theme: "Theme",
+      light: "Light",
+      dark: "Dark",
+      language: "Language",
+      english: "English",
+      chinese: "English"
     }
   }
 };
@@ -246,6 +256,7 @@ function render() {
   document.querySelectorAll(".tab").forEach((button) => {
     button.classList.toggle("active", button.dataset.tab === state.tab);
   });
+  renderPendingBadge(data);
   document.querySelectorAll("[data-language]").forEach((button) => {
     button.classList.toggle("active", button.dataset.language === language());
   });
@@ -268,6 +279,7 @@ function render() {
   }
   if (state.tab === "fitting") {
     content.innerHTML = renderFitting(data);
+    bindFittingReview();
     return;
   }
   if (state.tab === "settings") {
@@ -553,6 +565,16 @@ function renderFitting(data) {
   const stats = job.stats || {};
   const instructions = job.instructions || {};
   const commands = (job.next_commands || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  const pendingChanges = Number(job.pending_changes || 0);
+  const changes = Array.isArray(job.changes) ? job.changes : [];
+  const changeRows = changes.map(renderFittingChange).join("");
+  const reviewActions = pendingChanges ? `
+    <div class="actions fitting-actions">
+      <button data-fitting-apply="selected" data-job-id="${escapeAttr(job.job_id || "")}">Accept Selected</button>
+      <button data-fitting-apply="all" data-job-id="${escapeAttr(job.job_id || "")}">Accept All</button>
+      <button data-fitting-reject data-job-id="${escapeAttr(job.job_id || "")}">Reject All</button>
+    </div>
+  ` : "";
   const reportMarkdown = String(job.report_markdown || "").trim();
   const reportBlock = reportMarkdown
     ? `<pre class="report-block">${escapeHtml(reportMarkdown)}</pre>`
@@ -560,7 +582,8 @@ function renderFitting(data) {
   return `
     <div class="definition">
       <h3>${escapeHtml(job.job_id || "Fitting")}</h3>
-      <p class="muted">${escapeHtml(job.status || "unknown")} · ${escapeHtml(job.version || "")}</p>
+      <p class="muted">${escapeHtml(job.status || "unknown")} | ${escapeHtml(job.version || "")}</p>
+      ${pendingChanges ? `<p class="theorem">${escapeHtml(pendingChanges)} changes pending review. Nothing has been written yet.</p>` : ""}
       <p>${escapeHtml(instructions.text || "No instructions were provided.")}</p>
       <dl class="factor-grid">
         <div><dt>Insights</dt><dd>${escapeHtml(stats.insights_proposed || 0)}</dd></div>
@@ -569,11 +592,37 @@ function renderFitting(data) {
         <div><dt>Ignored</dt><dd>${escapeHtml(stats.ignored_by_instruction || 0)}</dd></div>
       </dl>
       <p class="muted">${escapeHtml(job.report_file || "")}</p>
+      ${changeRows ? `<h3>Proposed Changes</h3><div class="fitting-change-list">${changeRows}</div>${reviewActions}` : ""}
       <h3>Report</h3>
       ${reportBlock}
       ${commands ? `<div class="definition compact"><strong>Next</strong><ul>${commands}</ul></div>` : ""}
     </div>
   `;
+}
+
+function renderFittingChange(change) {
+  const insight = change && change.payload && change.payload.insight || {};
+  const suggestion = change && change.payload && change.payload.suggestion || {};
+  const title = insight.title || suggestion.type || change.type || change.change_id;
+  const detail = insight.guidance || suggestion.reason || "";
+  const pending = (change.status || "pending") === "pending";
+  return `
+    <label class="fitting-change ${pending ? "" : "applied"}">
+      <input type="checkbox" data-change-id="${escapeAttr(change.change_id || "")}" ${pending ? "checked" : "disabled"}>
+      <span>
+        <strong>${escapeHtml(change.type || "")}: ${escapeHtml(title)}</strong>
+        <small>${escapeHtml(change.change_id || "")} | ${escapeHtml(change.risk || "")} | ${escapeHtml(change.status || "pending")}</small>
+        ${detail ? `<em>${escapeHtml(detail)}</em>` : ""}
+      </span>
+    </label>
+  `;
+}
+
+function renderPendingBadge(data) {
+  const button = document.querySelector('[data-tab="fitting"]');
+  if (!button) return;
+  const count = Number(data.fitting && data.fitting.pending_changes || 0);
+  button.textContent = count ? `${t("tabs.fitting")} (${count})` : t("tabs.fitting");
 }
 
 function renderInjectionLog(data) {
@@ -593,7 +642,7 @@ function renderInjectionEntry(item) {
   const matchedCount = item.matched_count || matched.length;
   const matchedText = matched.length
     ? `<ul class="matched-list">${matched.map((m) => `<li>${escapeHtml(m.title || m.id || m.instruction || "")}</li>`).join("")}</ul>`
-    : "—";
+    : "-";
 
   const sessionHtml = item.session_id ? `
     <div class="injection-field">
@@ -625,7 +674,7 @@ function renderInjectionEntry(item) {
         </div>
         <div class="injection-field">
           <dt>${escapeHtml(t("injection.instruction"))}</dt>
-          <dd class="instruction-block">${escapeHtml(item.agent_instruction || "—")}</dd>
+          <dd class="instruction-block">${escapeHtml(item.agent_instruction || "-")}</dd>
         </div>
         ${reasonHtml}
         ${sessionHtml}
@@ -661,11 +710,24 @@ function renderSettings(data) {
   return `
     <div class="definition">
       <h3>${escapeHtml(t("settings.userMode"))}</h3>
-      <p class="muted">${escapeHtml(t("settings.configuredMode"))}: ${escapeHtml(data.configured_mode)}. ${escapeHtml(t("settings.effectiveMode"))}: ${escapeHtml(data.mode)}.</p>
-      <div class="actions">
-        <button data-setting="mode" data-value="auto">${escapeHtml(t("settings.auto"))}</button>
-        <button data-setting="mode" data-value="autonomous">${escapeHtml(t("settings.autonomous"))}</button>
-        <button data-setting="mode" data-value="curated">${escapeHtml(t("settings.curated"))}</button>
+      <p class="muted">${escapeHtml(t("settings.configuredMode"))}: ${escapeHtml(data.configured_mode)}</p>
+      <div class="select-row">
+        <select id="mode-select" data-setting="mode">
+          <option value="curate" ${data.configured_mode === "curate" ? "selected" : ""}>${escapeHtml(t("settings.curate"))}</option>
+          <option value="auto" ${data.configured_mode === "auto" ? "selected" : ""}>${escapeHtml(t("settings.auto"))}</option>
+        </select>
+      </div>
+      <div class="mode-cards">
+        <div class="mode-card ${data.configured_mode === "auto" ? "active" : ""}" data-mode="auto">
+          <h4>${escapeHtml(t("settings.modeAutoTitle"))}</h4>
+          <p>${escapeHtml(t("settings.modeAutoDesc"))}</p>
+          <p class="muted">${escapeHtml(t("settings.modeAutoFor"))}</p>
+        </div>
+        <div class="mode-card ${data.configured_mode === "curate" ? "active" : ""}" data-mode="curate">
+          <h4>${escapeHtml(t("settings.modeCurateTitle"))}</h4>
+          <p>${escapeHtml(t("settings.modeCurateDesc"))}</p>
+          <p class="muted">${escapeHtml(t("settings.modeCurateFor"))}</p>
+        </div>
       </div>
     </div>
     <div class="definition">
@@ -722,16 +784,66 @@ function bindActions() {
 }
 
 function bindSettings() {
-  document.querySelectorAll("[data-setting]").forEach((button) => {
+  // Buttons (theme, language)
+  document.querySelectorAll("button[data-setting]").forEach((button) => {
     const current = state.manifesto && state.manifesto[button.dataset.setting];
     const configured = button.dataset.setting === "mode" ? state.manifesto.configured_mode : current;
     button.classList.toggle("active", configured === button.dataset.value);
-  });
-  document.querySelectorAll("[data-setting]").forEach((button) => {
     button.addEventListener("click", async () => {
       await request("/api/settings", {
         method: "POST",
         body: JSON.stringify({[button.dataset.setting]: button.dataset.value})
+      });
+      await load();
+    });
+  });
+
+  // Mode select dropdown
+  const select = document.getElementById("mode-select");
+  if (select) {
+    const mode = state.manifesto.configured_mode || "curate";
+    select.value = mode;
+    select.addEventListener("change", async (e) => {
+      const value = e.target.value;
+      await request("/api/settings", {
+        method: "POST",
+        body: JSON.stringify({mode: value})
+      });
+      await load();
+    });
+    // Highlight active mode card
+    document.querySelectorAll(".mode-card").forEach((card) => {
+      card.classList.toggle("active", card.dataset.mode === mode);
+    });
+  }
+}
+
+function bindFittingReview() {
+  document.querySelectorAll("[data-fitting-apply]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const jobId = button.dataset.jobId;
+      const all = button.dataset.fittingApply === "all";
+      const checkboxes = Array.from(document.querySelectorAll("[data-change-id]"));
+      const accepted = checkboxes
+        .filter((node) => all || node.checked)
+        .map((node) => node.dataset.changeId)
+        .filter(Boolean);
+      if (!accepted.length) return;
+      const result = await request("/api/fitting/apply", {
+        method: "POST",
+        body: JSON.stringify({job_id: jobId, accepted_change_ids: accepted})
+      });
+      if (result.ok === false) {
+        window.alert(result.error || "Fitting apply failed.");
+      }
+      await load();
+    });
+  });
+  document.querySelectorAll("[data-fitting-reject]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await request("/api/fitting/reject", {
+        method: "POST",
+        body: JSON.stringify({job_id: button.dataset.jobId})
       });
       await load();
     });

@@ -185,7 +185,7 @@ class PreferenceEngine:
             result.replaced.append(target.id)
             return target
         if action == "conflict":
-            note = decision.get("reason") or "发现同类场景下的不一致偏好"
+            note = decision.get("reason") or "Found inconsistent preferences for a similar scenario."
             target.conflict_notes.append(
                 f"{now_iso()} | {note} | candidate={candidate.preference}"
             )

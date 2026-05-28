@@ -1,15 +1,31 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from preference_agent.backends import HeuristicBackend
 from preference_agent.engine import PreferenceEngine
 from preference_agent.hooks import PreferenceHookManager
+from preference_agent.injection_log import read_injection_log
+from preference_agent.kimi_hooks import handle_kimi_hook
 from preference_agent.mcp_server import handle_request
+from preference_agent.models import PreferenceRecord
 from preference_agent.store import MarkdownPreferenceStore
+
+
+def _isolated_fitting_env(root: Path):
+    return patch.dict(
+        os.environ,
+        {
+            "PREFERENCE_UI_DIR": str(root / ".ui"),
+            "DATAILOR_FITTING_DIR": str(root / ".fitting"),
+        },
+        clear=False,
+    )
 
 
 class PreferenceHookTests(unittest.TestCase):
@@ -20,21 +36,22 @@ class PreferenceHookTests(unittest.TestCase):
             engine = PreferenceEngine(MarkdownPreferenceStore(store), backend=HeuristicBackend())
             hooks = PreferenceHookManager(engine, hooks_dir=root / "hooks", max_turns=2)
 
-            first = hooks.on_turn_complete(
-                user_message="以后默认先给我结论。",
-                assistant_response="好的。",
-                agent="codex",
-                session_id="s1",
-            )
-            self.assertTrue(first["buffered"])
-            self.assertNotIn("flush", first)
+            with _isolated_fitting_env(root):
+                first = hooks.on_turn_complete(
+                    user_message="From now on, give me the conclusion first.",
+                    assistant_response="Acknowledged.",
+                    agent="codex",
+                    session_id="s1",
+                )
+                self.assertTrue(first["buffered"])
+                self.assertNotIn("flush", first)
 
-            second = hooks.on_turn_complete(
-                user_message="以后代码改完默认跑相关测试。",
-                assistant_response="收到。",
-                agent="codex",
-                session_id="s1",
-            )
+                second = hooks.on_turn_complete(
+                    user_message="From now on, run relevant tests by default after code changes.",
+                    assistant_response="Acknowledged.",
+                    agent="codex",
+                    session_id="s1",
+                )
 
             self.assertTrue(second["flush"]["flushed"])
             records = MarkdownPreferenceStore(store).load()
@@ -48,16 +65,40 @@ class PreferenceHookTests(unittest.TestCase):
             engine = PreferenceEngine(MarkdownPreferenceStore(store), backend=HeuristicBackend())
             hooks = PreferenceHookManager(engine, hooks_dir=root / "hooks", max_turns=5)
 
-            hooks.on_turn_complete(
-                user_message="以后默认回复我中文。",
-                assistant_response="好的。",
-                agent="codex",
-                session_id="s2",
-            )
-            ended = hooks.on_session_end(agent="codex", session_id="s2")
+            with _isolated_fitting_env(root):
+                hooks.on_turn_complete(
+                    user_message="From now on, reply to me in English by default.",
+                    assistant_response="Acknowledged.",
+                    agent="codex",
+                    session_id="s2",
+                )
+                ended = hooks.on_session_end(agent="codex", session_id="s2")
 
             self.assertTrue(ended["buffer_flush"]["flushed"])
             self.assertTrue(MarkdownPreferenceStore(store).load())
+
+    def test_turn_and_session_fitting_triggers_are_queued_in_background(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = root / "prefs.md"
+            engine = PreferenceEngine(MarkdownPreferenceStore(store), backend=HeuristicBackend())
+            hooks = PreferenceHookManager(engine, hooks_dir=root / "hooks", max_turns=1)
+
+            with _isolated_fitting_env(root), patch(
+                "preference_agent.hooks.maybe_run_fitting_after_capture",
+                return_value={"ok": True, "triggered": False},
+            ) as fitting:
+                hooks.on_turn_complete(
+                    user_message="From now on, give me the conclusion first.",
+                    assistant_response="Acknowledged.",
+                    agent="codex",
+                    session_id="s-background",
+                )
+                self.assertTrue(fitting.call_args.kwargs["background"])
+
+                fitting.reset_mock()
+                hooks.on_session_end(agent="codex", session_id="s-background")
+                self.assertTrue(fitting.call_args.kwargs["background"])
 
     def test_action_hook_creates_pending_behavior_preference(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -76,7 +117,7 @@ class PreferenceHookTests(unittest.TestCase):
             self.assertTrue(result["captured"])
             records = MarkdownPreferenceStore(store).load()
             self.assertEqual(records[0].status, "needs_review")
-            self.assertIn("验证", records[0].preference)
+            self.assertIn("verification", records[0].preference.casefold())
 
     def test_mcp_exposes_turn_hook_tool(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -95,8 +136,8 @@ class PreferenceHookTests(unittest.TestCase):
                         "arguments": {
                             "agent": "codex",
                             "session_id": "s4",
-                            "user_message": "以后默认先给结论。",
-                            "assistant_response": "好的。",
+                            "user_message": "From now on, give the conclusion first.",
+                            "assistant_response": "Acknowledged.",
                             "dry_run": True,
                         },
                     },
@@ -104,6 +145,72 @@ class PreferenceHookTests(unittest.TestCase):
                 engine,
             )
             self.assertIn("buffered", response["result"]["content"][0]["text"])
+
+    def test_kimi_hook_runner_maps_lifecycle_events_to_datailor_hooks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = root / "prefs.md"
+            MarkdownPreferenceStore(store).save(
+                [
+                    PreferenceRecord(
+                        title="Tests",
+                        applies_to="After the agent changes code",
+                        preference="After code changes, run relevant tests by default.",
+                        status="active",
+                        confidence="high",
+                    )
+                ]
+            )
+            env = {
+                "PREFERENCE_HOOKS_DIR": str(root / ".hooks"),
+                "PREFERENCE_UI_DIR": str(root / ".ui"),
+                "DATAILOR_FITTING_DIR": str(root / ".fitting"),
+            }
+            with patch.dict(os.environ, env, clear=False):
+                handle_kimi_hook(
+                    {
+                        "hook_event_name": "SessionStart",
+                        "session_id": "k1",
+                        "cwd": str(root),
+                        "source": "startup",
+                    },
+                    store_path=store,
+                )
+                handle_kimi_hook(
+                    {
+                        "hook_event_name": "UserPromptSubmit",
+                        "session_id": "k1",
+                        "cwd": str(root),
+                        "prompt": "Ready to reply to the user after completing code. From now on, give the conclusion first.",
+                    },
+                    store_path=store,
+                )
+                handle_kimi_hook(
+                    {
+                        "hook_event_name": "PostToolUse",
+                        "session_id": "k1",
+                        "cwd": str(root),
+                        "tool_name": "Shell",
+                        "tool_output": "pytest passed before reporting completion",
+                    },
+                    store_path=store,
+                )
+                handle_kimi_hook(
+                    {
+                        "hook_event_name": "Stop",
+                        "session_id": "k1",
+                        "cwd": str(root),
+                    },
+                    store_path=store,
+                )
+
+            events = read_injection_log(store)
+            hooks = [item["hook"] for item in events]
+            self.assertIn("session_start", hooks)
+            self.assertIn("user_message", hooks)
+            self.assertIn("action_executed", hooks)
+            self.assertIn("turn_complete", hooks)
+            self.assertTrue(any(item["agent"] == "kimi" for item in events))
 
 
 if __name__ == "__main__":

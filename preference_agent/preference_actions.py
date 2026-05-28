@@ -218,4 +218,4 @@ def _clean_correction(text: str) -> str:
 
 
 def _normalize(text: str) -> str:
-    return " ".join(str(text).split()).strip().rstrip("。.!?！？").casefold()
+    return " ".join(str(text).split()).strip().rstrip(".!?").casefold()

@@ -154,22 +154,22 @@ def _heuristic_summary(records: list[PreferenceRecord]) -> str:
     pending = [record for record in records if record.status != "active"]
     source = active or records
     lines: list[str] = []
-    lines.append("系统目前理解到：你更看重能直接推进、可验证、少废话且不会破坏上下文的协作方式。")
+    lines.append("The current preference profile indicates that you value direct, verifiable, low-noise collaboration that preserves context.")
 
-    communication = _first_matching(source, ("简洁", "结论", "大纲", "回复", "回话", "分点", "长文", "展开"))
-    execution = _first_matching(source, ("测试", "验证", "review", "代码", "实现", "工具", "编辑", "覆盖"))
-    memory = _first_matching(source, ("文档", "沉淀", "回读", "中文", "Linear", "issue", "外部系统"))
-    autonomy = _first_matching(source, ("确认", "询问", "反问", "直接", "自动", "自主", "不要问"))
+    communication = _first_matching(source, ("concise", "conclusion", "outline", "reply", "bullets", "long-form", "detailed"))
+    execution = _first_matching(source, ("test", "verify", "review", "code", "implementation", "tool", "edit", "coverage"))
+    memory = _first_matching(source, ("document", "notes", "read back", "English", "Linear", "issue", "external system"))
+    autonomy = _first_matching(source, ("confirm", "ask", "clarify", "direct", "automatic", "autonomous", "do not ask"))
 
     bullets = []
     if communication:
-        bullets.append(f"沟通上，偏好 {communication}")
+        bullets.append(f"Communication preference: {communication}")
     if execution:
-        bullets.append(f"执行上，偏好 {execution}")
+        bullets.append(f"Execution preference: {execution}")
     if memory:
-        bullets.append(f"长期协作上，偏好 {memory}")
+        bullets.append(f"Long-term collaboration preference: {memory}")
     if autonomy:
-        bullets.append(f"节奏上，偏好 {autonomy}")
+        bullets.append(f"Cadence preference: {autonomy}")
     for record in source:
         statement = _statement(record)
         if statement and statement not in bullets and len(bullets) < 5:
@@ -177,12 +177,12 @@ def _heuristic_summary(records: list[PreferenceRecord]) -> str:
     if bullets:
         lines.extend(f"- {item}" for item in bullets[:5])
     if pending:
-        lines.append(f"另有 {len(pending)} 条偏好仍在观察或待确认，系统会先谨慎展示，不会把它们当作已完全生效的长期画像。")
+        lines.append(f"{len(pending)} additional preference(s) are still under review, so the system will surface them cautiously instead of treating them as confirmed long-term profile data.")
     return "\n".join(lines)
 
 
 def _cold_start_summary() -> str:
-    return "偏好库仍处于冷启动状态。系统还没有形成稳定的用户画像，会先观察用户明确表达的长期偏好，再逐步更新这里。"
+    return "The preference store is still in cold start. The system has not formed a stable profile yet, so it will observe explicit long-term preferences before updating this summary."
 
 
 def _record_view(record: PreferenceRecord) -> dict[str, Any]:
@@ -246,7 +246,7 @@ def _strip_title(text: str) -> str:
     lines = text.splitlines()
     while lines and not lines[0].strip():
         lines.pop(0)
-    if lines and lines[0].strip().casefold() in {SUMMARY_TITLE.casefold(), "# executive summary", "# 执行摘要", "## executive summary"}:
+    if lines and lines[0].strip().casefold() in {SUMMARY_TITLE.casefold(), "# executive summary", "## executive summary"}:
         lines.pop(0)
     return "\n".join(lines).strip()
 
@@ -255,29 +255,29 @@ def _summary_enabled() -> bool:
     return os.getenv("PREFERENCE_EXECUTIVE_SUMMARY_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
-EXECUTIVE_SUMMARY_SYSTEM_PROMPT = f"""你是个人偏好画像的 Executive Summary 生成器。
+EXECUTIVE_SUMMARY_SYSTEM_PROMPT = f"""You generate an Executive Summary for a personal preference profile.
 
-你的任务不是重复列出所有偏好，而是让用户打开面板时感觉“系统真的理解并记住了我”。
+Your job is not to repeat every preference. The summary should make the user feel that the system understands and remembers their working style.
 
-输入会包含：
-- current_summary：当前摘要，可能为空。
-- new_or_changed_preferences：本轮新增或变更的偏好。
-- all_preferences：当前偏好库中较重要的偏好。
-- force_update：是否强制刷新。
+Input fields:
+- current_summary: the current summary, which may be empty.
+- new_or_changed_preferences: preferences added or changed in this run.
+- all_preferences: important preferences currently in the store.
+- force_update: whether to force a refresh.
 
-请先判断新增/变更的偏好是否足以更新 current_summary。若不足以更新，返回 should_update=false。
-若需要更新，生成一份中文 Markdown 摘要：
-- 2 到 5 条要点即可，宁可具体，不要空泛。
-- 可以使用第二人称“你”，语气克制、准确、被理解，但不要肉麻。
-- 只总结长期偏好、工作习惯、协作风格、信任边界和验证标准。
-- 不要写路径、URL、issue 编号、一次性任务、密钥、临时对象名。
-- 不要输出内部字段名、confidence、status、metadata。
-- 不要把 pending/needs_review 写成已经绝对确认的偏好。
+First decide whether the new or changed preferences are enough to update current_summary. If not, return should_update=false.
+If an update is needed, produce an English Markdown summary:
+- Use 2 to 5 specific bullets.
+- You may use second person, with a restrained and accurate tone.
+- Summarize only long-term preferences, work habits, collaboration style, trust boundaries, and verification standards.
+- Do not include paths, URLs, issue IDs, one-off tasks, secrets, or temporary object names.
+- Do not output internal field names such as confidence, status, or metadata.
+- Do not present pending or needs_review items as fully confirmed preferences.
 
-输出 JSON 对象：
+Return a JSON object:
 {{
   "should_update": true,
-  "reason": "为什么更新或不更新",
-  "executive_summary": "Markdown 摘要文本，不要包含 {SUMMARY_TITLE}"
+  "reason": "why the summary was or was not updated",
+  "executive_summary": "Markdown summary text without {SUMMARY_TITLE}"
 }}
 """

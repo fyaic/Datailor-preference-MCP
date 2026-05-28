@@ -29,7 +29,7 @@ def default_data_dir() -> Path:
 
 def default_store_path() -> Path:
     configured = os.getenv("PREFERENCE_STORE_PATH")
-    return Path(configured) if configured else default_data_dir() / "个人偏好.md"
+    return Path(configured) if configured else default_data_dir() / "personal-preferences.md"
 
 
 def default_checkpoint_dir() -> Path:

@@ -15,12 +15,12 @@ from .store import MarkdownPreferenceStore
 ASKED_CONFLICTS_FILENAME = ".asked_conflicts.jsonl"
 _ASKED_CONFLICTS: set[str] = set()
 
-DETAIL_WORDS = ("详细", "展开", "完整", "充分解释", "长文", "exhaustive", "detailed")
-CONCISE_WORDS = ("简洁", "简短", "短一点", "不要长文", "别啰嗦", "少废话", "concise", "brief", "short")
-TEST_REQUIRED_WORDS = ("测试", "验证", "pytest", "test", "verify", "verification", "回归")
-TEST_SKIP_WORDS = ("不用测试", "不要测试", "跳过测试", "不测", "无需验证", "no test", "skip test", "without verification")
-ASK_WORDS = ("确认", "询问", "反问", "ask", "confirm", "manual")
-NO_ASK_WORDS = ("不用问", "不要问", "无需确认", "直接", "自动", "不反问", "do not ask", "no confirmation")
+DETAIL_WORDS = ("exhaustive", "detailed", "full explanation", "long-form", "fully explain")
+CONCISE_WORDS = ("concise", "brief", "short", "shorter", "no long-form", "less verbose")
+TEST_REQUIRED_WORDS = ("test", "verify", "verification", "pytest", "regression")
+TEST_SKIP_WORDS = ("no test", "skip test", "without verification", "do not test", "skip verification")
+ASK_WORDS = ("ask", "confirm", "manual", "clarify")
+NO_ASK_WORDS = ("do not ask", "no confirmation", "directly", "automatic", "no clarification")
 
 
 @dataclass(frozen=True)
@@ -67,18 +67,18 @@ def apply_decision_conflict_policy(
             "matched_preferences": [item for item in matches if isinstance(item, dict) and item.get("id") in conflict_ids],
             "conflict": conflict_payload,
             "agent_instruction": _ask_instruction(group, ask.key),
-            "reason": "命中的 active 偏好之间存在冲突，不能同时注入，需让用户选择。",
+            "reason": "Matched active preferences conflict and cannot be injected together, so the user must choose.",
         }
 
     safe_matches = [item for item in matches if not isinstance(item, dict) or item.get("id") not in conflict_ids]
     if safe_matches:
-        combined = "；".join(str(item.get("instruction") or "") for item in safe_matches[:3] if isinstance(item, dict))
+        combined = "; ".join(str(item.get("instruction") or "") for item in safe_matches[:3] if isinstance(item, dict))
         return {
             **decision,
             "matched_preferences": safe_matches,
             "conflict_suppressed": conflict_payload,
-            "agent_instruction": f"在回复或执行前应用这些用户偏好：{combined}",
-            "reason": "已排除一组未解决或已询问过的冲突偏好，仅注入非冲突偏好。",
+            "agent_instruction": f"Apply these user preferences before replying or acting: {combined}",
+            "reason": "Excluded one unresolved or previously asked conflict group and injected only non-conflicting preferences.",
         }
     return {
         **decision,
@@ -87,7 +87,7 @@ def apply_decision_conflict_policy(
         "matched_preferences": [],
         "conflict_suppressed": conflict_payload,
         "agent_instruction": "",
-        "reason": "命中的偏好互相冲突，且该冲突组合已询问过或已解决；为避免重复询问，本轮不注入冲突偏好。",
+        "reason": "Matched preferences conflict, and this conflict group was already asked or resolved; no conflicting preference is injected this turn.",
     }
 
 
@@ -176,7 +176,7 @@ def resolve_preference_conflict(
     elif normalized in {"neither", "none", "both_not_apply", "exception"}:
         for record in affected:
             record.status = "needs_review"
-            record.exceptions.append(user_feedback or "用户选择本上下文两个冲突偏好都不适用。")
+            record.exceptions.append(user_feedback or "The user chose that neither conflicting preference applies in this context.")
             record.conflict_notes.append(f"{now_iso()} | resolved_conflict={conflict_key_value} | exception={user_feedback}")
             record.touch()
     elif normalized in {"custom", "correct"} and user_feedback.strip():
@@ -308,11 +308,11 @@ def _conflict_payload(records: list[PreferenceRecord], ask: AskDecision) -> dict
 
 
 def _ask_instruction(records: list[PreferenceRecord], key: str) -> str:
-    options = "；".join(f"{index + 1}. {record.preference}" for index, record in enumerate(records))
+    options = "; ".join(f"{index + 1}. {record.preference}" for index, record in enumerate(records))
     return (
-        "检测到本轮命中的用户偏好互相冲突，不能同时应用。"
-        f"请简短反问用户本次采用哪一种，或是否两个都不适用：{options}。"
-        f"用户回答后调用 `resolve_preference_conflict`，conflict_key={key}。"
+        "Matched user preferences conflict and cannot be applied together. "
+        f"Briefly ask the user which option to use this time, or whether neither applies: {options}. "
+        f"After the user answers, call `resolve_preference_conflict` with conflict_key={key}."
     )
 
 

@@ -1,6 +1,5 @@
-User: 以后把代码验证标准改成：先跑最相关的测试；如果环境缺依赖或测试跑不了，必须明确说明卡在哪里和替代验证做了什么。
+User: From now on, change the code verification standard: run the most relevant tests first; if dependencies are missing or tests cannot run, clearly explain the blocker and the alternative verification performed.
 
-Assistant: 这个讨论有点复杂，要不要整理文档？
+Assistant: This discussion is complex. Should I organize it into documentation?
 
-User: 要。只要是方案设计、决策推理、复杂问题拆解，就主动问我要不要沉淀成 Markdown。
-
+User: Yes. For solution design, decision reasoning, and complex problem breakdowns, proactively ask whether to save the conclusions as Markdown.

@@ -1,47 +1,47 @@
-# 大规模本地会话捕获策略
+# Large Local Session Capture Strategy
 
-## 背景
+## Background
 
-POC 的默认冷启动偏好库是空的。真实用户新安装后，不应该由系统猜测偏好，而应该从两类本地证据中捕获：
+The default cold-start preference store is empty. A new installation should not guess preferences. It should capture them from two local evidence sources:
 
-1. 用户已经写过的 agent 规则文件。
-2. 用户历史会话 JSONL 中的用户输入部分。
+1. Agent rule files the user has already written.
+2. User-authored messages in historical session JSONL files.
 
-这两类证据的优先级不同：agent 规则是显式偏好，历史用户输入是行为反馈和隐式偏好。第一次 capture 应该先读规则，再读历史。
+These sources have different priority. Agent rules are explicit preferences. Historical user messages are behavioral feedback and implicit preferences. The first capture should read rules first, then history.
 
-## 总策略
+## Overall Strategy
 
 ```text
-capture runner 启动
-  -> 读取 env 配置
-  -> 发现 agent 规则文件
-  -> 提取显式偏好与硬约束
-  -> 写入候选偏好
-  -> 流式扫描 JSONL
-  -> 只读取 user/human 输入
-  -> 召回可能包含偏好的片段
-  -> 分批模型精提，改写成可复用偏好
-  -> 过滤一次性任务、路径、URL、issue 编号和泛用假条件
-  -> 合并、去重、冲突标记
-  -> 直接维护唯一 Markdown 偏好库
+start capture runner
+  -> read environment config
+  -> discover agent rule files
+  -> extract explicit preferences and hard constraints
+  -> write preference candidates
+  -> stream JSONL files
+  -> read only user/human input
+  -> recall fragments that may contain preferences
+  -> batch model refinement into reusable preferences
+  -> filter one-off tasks, paths, URLs, issue IDs, and generic fake scopes
+  -> merge, dedupe, and mark conflicts
+  -> maintain one canonical Markdown preference store
 ```
 
-## 谁来执行
+## Execution Roles
 
-不要让 agent 自己读大 JSONL，也不要让单次对话承担捕获任务。
+Do not make an agent read huge JSONL files inside one conversation. Do not put the whole capture job into one chat turn.
 
-| 角色 | 职责 |
-|------|------|
-| 人 / agent | 启动任务、查看最终 Markdown，必要时查看 debug 输出 |
-| capture runner | 扫描文件、召回用户输入、维护 `个人偏好.md` 和 checkpoint |
-| model backend | 正式冷启动必需；负责对候选片段做语义精提 |
-| Markdown store | 唯一产品输出，存放人类可读偏好 |
+| Role | Responsibility |
+| --- | --- |
+| Human / agent | Start the job, inspect final Markdown, inspect debug output if needed |
+| Capture runner | Scan files, recall user input, maintain `personal-preferences.md` and checkpoints |
+| Model backend | Required for production cold start; semantically refines candidate fragments |
+| Markdown store | Only product output, with human-readable preferences |
 
-`recall-only` 只适合离线测试和召回灾难排查，不适合作为正式偏好输出。正式冷启动应使用 `recall-extract` 或 `semantic-extract`，否则会把一次性任务和用户原文误写入偏好库。
+`recall-only` is only for offline tests and recall incident debugging. Production cold start should use `recall-extract` or `semantic-extract`; otherwise one-off tasks and raw user text may be written as preferences.
 
-## Env 设计
+## Environment Design
 
-最小正式配置：
+Minimum production config:
 
 ```powershell
 $env:PREFERENCE_PROJECT_ROOT = "."
@@ -53,9 +53,9 @@ $env:PREFERENCE_MODEL_TIMEOUT = "120"
 $env:PREFERENCE_MODEL_BACKEND = "openai-compatible"
 ```
 
-默认无需设置 `PREFERENCE_STORE_PATH` / `PREFERENCE_CHECKPOINT_DIR`。Datailor 会写入用户级数据目录，例如 Windows `%APPDATA%\Datailor`。只有需要把数据放到自定义位置时，才设置 `DATAILOR_DATA_DIR` 或 `PREFERENCE_STORE_PATH`。
+`PREFERENCE_STORE_PATH` and `PREFERENCE_CHECKPOINT_DIR` usually do not need to be set. Datailor writes to the user-level data directory, such as `%APPDATA%\Datailor` on Windows. Set `DATAILOR_DATA_DIR` or `PREFERENCE_STORE_PATH` only when data must live somewhere else.
 
-接云模型或本地模型时，只替换模型后端：
+Cloud or local model backend:
 
 ```powershell
 $env:PREFERENCE_MODEL_BACKEND = "openai-compatible"
@@ -64,7 +64,7 @@ $env:PREFERENCE_MODEL_API_KEY = "replace-me"
 $env:PREFERENCE_MODEL_NAME = "replace-me"
 ```
 
-未来切本地模型：
+Future local model example:
 
 ```powershell
 $env:PREFERENCE_MODEL_BASE_URL = "http://localhost:11434/v1"
@@ -72,80 +72,71 @@ $env:PREFERENCE_MODEL_API_KEY = "local"
 $env:PREFERENCE_MODEL_NAME = "qwen2.5:7b"
 ```
 
-## 第一步：先读取 agent 已写规则
+## Step 1: Read Existing Agent Rules First
 
-### 目标
+### Goal
 
-先把用户已经明确写过的规则读进来，作为最高置信度的初始偏好来源。
+Read rules the user has already written and use them as the highest-confidence initial preference source.
 
-### 候选路径
+### Candidate Paths
 
-捕获器不应只假设存在 `agents/claude.md`，而应按优先级搜索：
+The capture runner should discover multiple rule locations instead of hard-coding `agents/claude.md`.
 
-1. 当前项目根目录：
+1. Current project root:
    - `AGENTS.md`
    - `agents.md`
    - `CLAUDE.md`
    - `claude.md`
-2. 当前项目 `agents/` 目录：
+2. Current project `agents/` directory:
    - `agents/claude.md`
    - `agents/codex.md`
    - `agents/openclaw.md`
    - `agents/*.md`
    - `agents/*.yaml`
    - `agents/*.yml`
-3. 仓库子项目目录：
+3. Repository subprojects:
    - `<subproject>/AGENTS.md`
    - `<subproject>/agents/*.md`
    - `<subproject>/agents/*.yaml`
 
-### 当前仓库观察
+### Rule Extraction
 
-捕获器要支持“多位置规则发现”，不能把 `agents/claude.md` 写死为唯一入口。
+Rule file content falls into three categories:
 
-### 规则文件提取方式
+| Type | Handling |
+| --- | --- |
+| Hard constraint | Direct high-confidence preference candidate |
+| Work habit | Medium/high-confidence preference candidate |
+| Project-local rule | Mark with project path scope to avoid global pollution |
 
-规则文件中的内容分三类：
-
-| 类型 | 处理方式 |
-|------|----------|
-| 硬约束 | 直接作为高置信偏好候选 |
-| 工作习惯 | 作为中高置信偏好候选 |
-| 项目局部规则 | 标记适用项目路径，避免全局污染 |
-
-示例：
+Example:
 
 ```json
 {
   "source_type": "agent_rule",
   "source": "C:\\path\\to\\project\\AGENTS.md",
   "scope": "project:project-name",
-  "preference": "完成阶段性成果后询问是否更新 Linear issue",
+  "preference": "After a phase is completed, ask whether the Linear issue should be updated.",
   "confidence": "high"
 }
 ```
 
-## 第二步：JSONL 只读取用户输入
+## Step 2: Read Only User Input From JSONL
 
-### 核心判断
+For large local JSONL files, do not send both user input and model output to the model by default. First capture should read only user input because:
 
-对庞大的本地 JSONL，不应默认把用户输入和模型输出都送进模型。第一次捕获只读用户输入，理由是：
+- Token cost drops sharply.
+- User input directly contains requests, feedback, corrections, and preference changes.
+- Model output is mostly execution and explanation noise.
+- The preference system should learn how the user asks agents to behave, not how agents answer.
 
-- token 成本大幅下降。
-- 用户输入更直接包含要求、反馈、纠错、偏好变化。
-- 模型输出大量是执行过程和解释，容易稀释偏好信号。
-- 偏好系统要学习“用户怎样要求 agent”，而不是学习“agent 怎样回答”。
-
-### 保留什么
-
-只保留 role 为以下值的消息：
+Keep messages with role values such as:
 
 - `user`
 - `human`
-- `用户`
-- 其他可映射为用户的 sender/author 字段
+- other sender/author values that can be mapped to a user
 
-忽略：
+Ignore:
 
 - `assistant`
 - `model`
@@ -153,31 +144,31 @@ $env:PREFERENCE_MODEL_NAME = "qwen2.5:7b"
 - `tool`
 - `system`
 
-### 例外
+### Lightweight Context Exceptions
 
-少数情况下可以保留用户输入前后的轻量上下文，但不能把完整模型输出送入提取模型：
+Sometimes a user message needs the previous assistant question or summary. Keep only lightweight context, never the full model output.
 
-| 场景 | 可保留上下文 |
-|------|--------------|
-| 用户说“按你刚才那个方案” | 保留上一条 assistant 输出的摘要，不保留全文 |
-| 用户说“这个不对” | 保留上一条 assistant 输出的 200-500 字截断摘要 |
-| 用户回答“要/不要/可以” | 保留上一条 assistant 问句 |
+| Scenario | Context to keep |
+| --- | --- |
+| User says "use the plan you just gave" | Summary of previous assistant output |
+| User says "that is wrong" | 200-500 character truncated previous assistant output |
+| User answers "yes/no/okay" | Previous assistant question |
 
-这类上下文应由本地预处理器提取，作为 `context_hint`，而不是完整塞进模型。
+Local preprocessing should produce this as `context_hint`.
 
-## 大 JSONL 捕获流水线
+## Large JSONL Pipeline
 
-### Phase 1：Profile
+### Phase 1: Profile
 
-先抽样前 1000 行，识别：
+Sample the first 1000 lines to detect:
 
-- JSONL 每行结构。
-- role 字段路径。
-- content 字段路径。
-- timestamp/session_id/conversation_id 字段。
-- 是否存在嵌套 message 数组。
+- JSONL row structure
+- role field path
+- content field path
+- timestamp / session_id / conversation_id fields
+- nested message arrays
 
-输出：
+Example output:
 
 ```json
 {
@@ -189,17 +180,17 @@ $env:PREFERENCE_MODEL_NAME = "qwen2.5:7b"
 }
 ```
 
-### Phase 2：Stream
+### Phase 2: Stream
 
-对文件逐行读取：
+Read files line by line:
 
-- 不把整个 JSONL 加载进内存。
-- 每处理 N 行写一次 checkpoint。
-- 坏行记录到错误日志，跳过并继续。
-- 默认没有全局时间上限，会全量遍历到完成。
-- `PREFERENCE_CAPTURE_MAX_MINUTES` 只作为 debug 或灾难止损开关；默认 `0` 表示不启用。
+- Do not load the full JSONL file into memory.
+- Write checkpoints every N lines.
+- Log malformed rows and continue.
+- By default, there is no global time limit; traversal continues until completion.
+- `PREFERENCE_CAPTURE_MAX_MINUTES` is only a debug or emergency stop switch. Default `0` disables it.
 
-checkpoint 示例：
+Checkpoint example:
 
 ```json
 {
@@ -210,34 +201,34 @@ checkpoint 示例：
 }
 ```
 
-### Phase 3：User-only Recall
+### Phase 3: User-Only Recall
 
-先用低成本规则从用户输入中召回候选片段，不直接全量调用模型。
+Use low-cost local rules to recall candidate fragments from user input before calling any model.
 
-召回信号：
+Recall signals:
 
-- 显式偏好：`以后`、`默认`、`每次`、`总是`、`我希望`、`我偏好`
-- 禁止/约束：`不要`、`别`、`禁止`、`必须`、`不能`
-- 反馈纠错：`不对`、`不是这个意思`、`你应该`、`下次`
-- 工作流：`测试`、`验证`、`review`、`回读`、`Linear`、`沉淀`、`文档`
-- 偏好变化：`改成`、`从现在开始`、`以后默认`
+- Explicit preferences: "from now on", "default", "every time", "always", "I prefer", "I want"
+- Constraints: "do not", "avoid", "must", "cannot"
+- Corrections: "wrong", "not what I meant", "you should", "next time"
+- Workflow: "test", "verify", "review", "read back", "Linear", "document"
+- Preference changes: "change to", "from now on", "default to"
 
-召回输出是候选片段，不是正式偏好。
+Recall output is candidate fragments, not final preferences.
 
-### Phase 3.5：四路融合召回
+### Phase 3.5: Multi-Route Recall
 
-当前实现新增 `PREFERENCE_RECALL_STRATEGY=multi`，在原有关键词召回外增加三条路径：
+`PREFERENCE_RECALL_STRATEGY=multi` adds three routes on top of keyword recall:
 
-| 路径 | 作用 | 默认输出 |
-|------|------|----------|
-| 语义召回 | 用 GLM `embedding-3` 或 hash fallback 对用户输入与偏好表达示例库做相似度搜索 | 只进入内存候选，debug 模式才落盘 |
-| 扩展关键词召回 | 覆盖正向、否定、条件、比较、指令型表达 | 只进入内存候选，debug 模式才落盘 |
-| 行为模式召回 | 统计“先给我...”“测试/验证/回读/沉淀”等跨 session 高频模板 | 只进入内存候选，debug 模式才落盘 |
-| 对话结构召回 | 识别“不对”“你理解错了”“重申”“我说过”等纠正/强调信号 | 只进入内存候选，debug 模式才落盘 |
+| Route | Purpose | Default output |
+| --- | --- | --- |
+| Semantic recall | Compare user input with preference examples through GLM `embedding-3` or hash fallback | In-memory candidates; persisted only in debug mode |
+| Expanded keyword recall | Cover positive, negative, conditional, comparative, and instruction-like expressions | In-memory candidates; persisted only in debug mode |
+| Behavior pattern recall | Count high-frequency templates across sessions, such as "outline first", "test", "verify", or "read back" | In-memory candidates; persisted only in debug mode |
+| Conversation-structure recall | Detect correction and emphasis signals such as "wrong", "you misunderstood", and "I said before" | In-memory candidates; persisted only in debug mode |
 
-POC 阶段使用内存向量索引，不强引入 Chroma/FAISS。后续如果真实数据规模验证通过，再把 embedding cache 和候选索引迁移到本地向量库。
+The POC uses an in-memory vector index. Chroma/FAISS should be introduced only after real data volume validates the need.
 
-GLM embedding 配置：
+GLM embedding config:
 
 ```powershell
 $env:PREFERENCE_RECALL_STRATEGY = "multi"
@@ -247,64 +238,64 @@ $env:PREFERENCE_EMBEDDING_MODEL = "embedding-3"
 $env:PREFERENCE_EMBEDDING_DIMENSIONS = "1024"
 ```
 
-API key 只写入 `.env.local`，不要写入文档或日志。
+Store API keys only in `.env.local`; never write them to docs or logs.
 
-### Phase 4：Batch Extract
+### Phase 4: Batch Extract
 
-把候选片段按主题和时间切批：
+Batch candidate fragments by topic and time:
 
-- 每批 20-100 条用户输入。
-- 同一 session 的相邻用户反馈尽量放在同批。
-- 每批只要求模型输出结构化候选偏好。
-- 模型必须输出证据 quote。
+- 20-100 user inputs per batch.
+- Keep neighboring user feedback from the same session in the same batch when possible.
+- Ask the model to output only structured preference candidates.
+- The model must include evidence quotes.
 
-### Phase 5：Markdown Store
+### Phase 5: Markdown Store
 
-大规模捕获的默认产品输出只有一份 Markdown：
+Large capture has one default product output:
 
 ```text
 <user-data>/
-  个人偏好.md
+  personal-preferences.md
   .capture-state/
     kimi-history.checkpoint.json
 ```
 
-`个人偏好.md` 只保留人类可读 bullet：
+`personal-preferences.md` keeps only human-readable bullets:
 
 ```md
-# 个人偏好
+# Personal Preferences
 
-## 已确认偏好
+## Active Preferences
 
-- 当 AI 完成代码修改时，默认运行相关测试；如果测试跑不了，要说明原因和替代验证。
-- 当讨论进入方案设计、决策推理或复杂问题拆解时，先询问是否需要沉淀成 Markdown 文档。
+- When code is changed, run relevant tests by default; if tests cannot run, explain why and provide alternate verification.
+- When a discussion becomes architectural, decision-heavy, or complex, ask whether it should be documented in Markdown.
 
-## 待观察偏好
+## Observed Preferences
 
-暂无待观察偏好。
+No observed preferences yet.
 ```
 
-metadata、candidate id、source quote、confidence 等信息不进入默认偏好库，避免破坏人类可读性和增加后续 token 成本。
+Metadata, candidate IDs, source quotes, and confidence do not enter the default store. This preserves readability and avoids unnecessary future token cost.
 
-### Phase 5.5：Loop、Timeout 与恢复
+### Phase 5.5: Loops, Timeouts, And Recovery
 
-长任务必须可中断、可恢复、可重复执行：
+Long tasks must be interruptible, resumable, and repeatable:
 
-- 每批写 checkpoint。
-- 每个 candidate 有稳定 `candidate_id`。
-- 外层 loop 默认持续到文件遍历完成，不依赖 agent 手动维护。
-- API 失败只影响当前 batch，按 `PREFERENCE_CAPTURE_MAX_RETRIES` 重试；重试后仍失败则记录错误并跳过该 batch。
-- 默认不写 candidate/extracted/summary 多份重复文件。
-- 设置 `PREFERENCE_CAPTURE_DEBUG=1` 时，失败批次才写入 `<user-data>\.debug-capture\*-failures.jsonl`，保留错误、候选 ID 和来源，方便复盘真实灾难现场。
-- `PREFERENCE_MODEL_TIMEOUT` 控制单次模型请求超时，防止卡死在某个请求上。
-- 显式设置 `PREFERENCE_CAPTURE_MAX_MINUTES` 或传 `--max-minutes` 时，到点写 checkpoint 后正常退出。
-- 下一次启动从 checkpoint 的 `line` 继续。
+- Write checkpoints per batch.
+- Give every candidate a stable `candidate_id`.
+- Keep the outer loop running until file traversal is complete; do not rely on an agent to manage it manually.
+- API failures affect only the current batch. Retry via `PREFERENCE_CAPTURE_MAX_RETRIES`; after repeated failure, log and skip the batch.
+- Do not write multiple duplicate candidate/extracted/summary files by default.
+- With `PREFERENCE_CAPTURE_DEBUG=1`, failed batches are written to `<user-data>\.debug-capture\*-failures.jsonl` with error, candidate ID, and source.
+- `PREFERENCE_MODEL_TIMEOUT` limits each model request to prevent one stuck request from blocking the job.
+- If `PREFERENCE_CAPTURE_MAX_MINUTES` or `--max-minutes` is set, write a checkpoint and exit cleanly when time is reached.
+- The next run resumes from the checkpoint line.
 
-`recall-extract` 模式会在每个 batch 召回候选后调用模型后端，把结构化精提结果合并进 `个人偏好.md`。这一步只处理候选片段，不处理完整 JSONL。
+`recall-extract` calls the model backend for recalled candidate fragments and merges structured results into `personal-preferences.md`. It never sends full JSONL to the model.
 
-`semantic-extract` 模式等价于“多路召回 + 模型精提”。它仍然只维护唯一官方 Markdown；candidate、extracted、failure、summary 都必须显式开启 `PREFERENCE_CAPTURE_DEBUG=1` 才会写入。
+`semantic-extract` means multi-route recall plus model refinement. It still maintains only one canonical Markdown store; candidate, extracted, failure, and summary outputs are written only when `PREFERENCE_CAPTURE_DEBUG=1`.
 
-命令示例：
+Command example:
 
 ```powershell
 python -m preference_agent.cli capture-job `
@@ -313,52 +304,52 @@ python -m preference_agent.cli capture-job `
   --mode recall-extract
 ```
 
-### Phase 6：Merge
+### Phase 6: Merge
 
-候选偏好进入 `个人偏好.md` 前做合并：
+Before entering `personal-preferences.md`, candidates are merged:
 
-| 动作 | 条件 |
-|------|------|
-| new | 没有同类偏好 |
-| merge | 同类且一致，追加证据 |
-| replace | 用户明确表达偏好变化 |
-| conflict | 同类但方向矛盾，需要人工观察 |
-| reject | 一次性任务、事实陈述、无复用价值 |
+| Action | Condition |
+| --- | --- |
+| new | No same-intent preference exists |
+| merge | Same intent and consistent; append evidence |
+| replace | User clearly changed the preference |
+| conflict | Same intent but opposite direction; needs observation |
+| reject | One-off task, factual statement, or no reusable value |
 
-## 为什么先读规则，再读用户输入
+## Why Read Rules Before User Input
 
-agent 规则文件通常是用户已经沉淀过的“显式偏好”，置信度高，但覆盖不全。
+Agent rule files are explicit, user-curated preferences with high confidence, but incomplete coverage.
 
-JSONL 用户输入覆盖面广，但噪声大。它更适合补充：
+JSONL user input has broad coverage but high noise. It is best for:
 
-- 用户反复纠正 agent 的地方。
-- 用户频繁要求的工作流。
-- 用户后来改变过的标准。
-- 没有写进规则文件但实际一直坚持的习惯。
+- Repeated user corrections.
+- Frequently requested workflows.
+- Standards the user changed later.
+- Habits that were never written into rule files.
 
-因此顺序应该是：
+The intended sequence is:
 
 ```text
-规则文件建立初始偏好锚点
-  -> JSONL 用户输入补充证据
-  -> 新证据强化、更新或冲突标记
+rule files establish initial preference anchors
+  -> JSONL user input adds evidence
+  -> new evidence strengthens, updates, or marks conflicts
 ```
 
-## token 控制原则
+## Token Control
 
-1. 不读模型输出全文。
-2. 不把完整 JSONL 全量喂给模型；只把召回后的候选片段分批喂给模型。
-3. 先本地召回，再模型精提。
-4. 一批只处理候选用户输入。
-5. 证据 quote 保留原文，但每条偏好只保留少量高质量证据。
-6. 默认只维护一份 Markdown；debug 输出必须显式打开。
+1. Do not read full model output.
+2. Do not feed the full JSONL file to the model; feed only recalled candidate fragments.
+3. Recall locally first, then refine with the model.
+4. Process only candidate user inputs in each batch.
+5. Keep evidence quotes, but only a small number of high-quality quotes per preference.
+6. Maintain one Markdown store by default; debug output must be explicitly enabled.
 
-## 验收标准
+## Acceptance Criteria
 
-- 能发现并读取已有 agent 规则文件。
-- 能流式处理大 JSONL，不一次性加载全文件。
-- 默认只读取用户输入。
-- 能在必要时保留上一条 assistant 问句或摘要作为轻量上下文。
-- 能直接维护一份人类可读 Markdown 偏好库。
-- 能通过 checkpoint 断点续跑。
-- 默认不生成多份重复语义文件；debug 模式才生成故障排查材料。
+- Discover and read existing agent rule files.
+- Stream large JSONL files without loading them fully into memory.
+- Read only user input by default.
+- Preserve the previous assistant question or summary as lightweight context when needed.
+- Maintain one human-readable Markdown preference store directly.
+- Resume from checkpoints.
+- Avoid duplicate semantic output files by default; debug mode is the only path that writes troubleshooting material.

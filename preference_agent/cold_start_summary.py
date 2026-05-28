@@ -62,6 +62,7 @@ def render_cold_start_summary(result: Any, quiet: bool = False) -> str:
                 str(summary["status"]),
                 f"Store updated: {_yes_no(summary['store_updated'])}",
                 "Next: datailor ui",
+                "IDE: datailor integrate status --client all",
             ]
         )
 
@@ -96,6 +97,8 @@ def render_cold_start_summary(result: Any, quiet: bool = False) -> str:
             "",
             "Next",
             "  Run: datailor ui",
+            "  Check IDE integrations: datailor integrate status --client all",
+            "  Preview IDE setup: datailor integrate install --client all --dry-run",
             "  Review pending/conflicts in the UI.",
         ]
     )
@@ -104,6 +107,8 @@ def render_cold_start_summary(result: Any, quiet: bool = False) -> str:
 
 def render_onboarding_summary(result: dict[str, Any], quiet: bool = False) -> str:
     scan = result.get("scan") if isinstance(result.get("scan"), dict) else None
+    agent_rules = result.get("agent_rules") if isinstance(result.get("agent_rules"), dict) else None
+    kimi_hooks = result.get("kimi_hooks") if isinstance(result.get("kimi_hooks"), dict) else None
     if not scan:
         before = result.get("before") if isinstance(result.get("before"), dict) else {}
         after = result.get("after") if isinstance(result.get("after"), dict) else {}
@@ -111,7 +116,7 @@ def render_onboarding_summary(result: dict[str, Any], quiet: bool = False) -> st
         store = (after.get("store") or before.get("store") or {}).get("path", "")
         if quiet:
             return f"Datailor onboard: {state}"
-        return "\n".join(
+        summary = "\n".join(
             [
                 "Datailor onboard",
                 "",
@@ -123,13 +128,48 @@ def render_onboarding_summary(result: dict[str, Any], quiet: bool = False) -> st
                 "",
                 "Next",
                 "  Run: datailor ui",
+                "  Check IDE integrations: datailor integrate status --client all",
             ]
         )
-    title = "Datailor onboard"
+        return _with_install_summary(summary, agent_rules=agent_rules, kimi_hooks=kimi_hooks)
     body = render_cold_start_summary(scan, quiet=quiet)
     if quiet:
         return body.replace("Next: datailor ui", "Next: datailor ui")
-    return body.replace("Datailor cold-start scan", title, 1)
+    summary = body.replace("Datailor cold-start scan", "Datailor onboard", 1)
+    return _with_install_summary(summary, agent_rules=agent_rules, kimi_hooks=kimi_hooks)
+
+
+def _with_install_summary(
+    summary: str,
+    agent_rules: dict[str, Any] | None,
+    kimi_hooks: dict[str, Any] | None,
+) -> str:
+    if not agent_rules and not kimi_hooks:
+        return summary
+    lines = [""]
+    if agent_rules:
+        status = "updated" if agent_rules.get("changed") else "already current"
+        lines.extend(
+            [
+                "Agent rules",
+                f"  Status: {status}",
+                f"  Target: {agent_rules.get('target', '')}",
+                f"  Managed block: {agent_rules.get('managed_start', '')} ... {agent_rules.get('managed_end', '')}",
+            ]
+        )
+    if kimi_hooks:
+        if len(lines) > 1:
+            lines.append("")
+        status = "updated" if kimi_hooks.get("changed") else "already current"
+        lines.extend(
+            [
+                "Kimi hooks",
+                f"  Status: {status}",
+                f"  Target: {kimi_hooks.get('target', '')}",
+                f"  Events: {', '.join(kimi_hooks.get('events') or [])}",
+            ]
+        )
+    return summary.rstrip() + "\n" + "\n".join(lines)
 
 
 def render_cold_start_progress(event: dict[str, Any]) -> str:

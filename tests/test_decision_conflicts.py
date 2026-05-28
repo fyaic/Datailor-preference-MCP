@@ -20,26 +20,26 @@ class DecisionConflictTests(unittest.TestCase):
             _write_conflicting_store(store)
             engine = PreferenceEngine(MarkdownPreferenceStore(store), backend=HeuristicBackend())
 
-            first = engine.decide("请回复用户问题，说明怎么处理。", agent="codex")
+            first = engine.decide("Please answer the user question and explain what to do.", agent="codex")
             self.assertEqual(first["decision"], "escalate")
             self.assertTrue(first["escalate"])
             self.assertIn("conflict", first)
             self.assertIn("resolve_preference_conflict", first["agent_instruction"])
-            self.assertIn("详细", first["agent_instruction"])
-            self.assertIn("简洁", first["agent_instruction"])
+            self.assertIn("detailed", first["agent_instruction"])
+            self.assertIn("concise", first["agent_instruction"])
 
-            second = engine.decide("请回复用户问题，说明怎么处理。", agent="codex")
+            second = engine.decide("Please answer the user question and explain what to do.", agent="codex")
             self.assertEqual(second["decision"], "no_preference")
             self.assertFalse(second["escalate"])
             self.assertIn("conflict_suppressed", second)
-            self.assertNotIn("详细展开；", second.get("agent_instruction", ""))
+            self.assertNotIn("detailed full explanations;", second.get("agent_instruction", ""))
 
     def test_resolve_conflict_prefers_one_and_deactivates_the_other(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             store = Path(temp) / "prefs.md"
             records = _write_conflicting_store(store)
             engine = PreferenceEngine(MarkdownPreferenceStore(store), backend=HeuristicBackend())
-            decision = engine.decide("请回复用户问题。", agent="codex")
+            decision = engine.decide("Please answer the user question.", agent="codex")
             conflict_key = decision["conflict"]["key"]
 
             result = resolve_preference_conflict(
@@ -51,21 +51,21 @@ class DecisionConflictTests(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             saved = {record.preference: record.status for record in MarkdownPreferenceStore(store).load()}
-            self.assertEqual(saved["回复用户问题时，回答要简洁短一点，不要长文。"], "active")
-            self.assertEqual(saved["回复用户问题时，回答要详细展开，充分解释。"], "needs_review")
+            self.assertEqual(saved["When replying to user questions, keep answers concise and short; avoid long-form explanations."], "active")
+            self.assertEqual(saved["When replying to user questions, answer with detailed full explanations."], "needs_review")
 
     def test_resolve_conflict_neither_moves_both_to_review(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             store = Path(temp) / "prefs.md"
             _write_conflicting_store(store)
             engine = PreferenceEngine(MarkdownPreferenceStore(store), backend=HeuristicBackend())
-            conflict_key = engine.decide("请回复用户问题。", agent="codex")["conflict"]["key"]
+            conflict_key = engine.decide("Please answer the user question.", agent="codex")["conflict"]["key"]
 
             result = resolve_preference_conflict(
                 store_path=store,
                 conflict_key_value=conflict_key,
                 resolution="neither",
-                user_feedback="这个上下文两个都不适用。",
+                user_feedback="Neither applies in this context.",
             )
 
             self.assertTrue(result["ok"])
@@ -76,7 +76,7 @@ class DecisionConflictTests(unittest.TestCase):
             store = Path(temp) / "prefs.md"
             records = _write_conflicting_store(store)
             engine = PreferenceEngine(MarkdownPreferenceStore(store), backend=HeuristicBackend())
-            conflict_key = engine.decide("请回复用户问题。", agent="codex")["conflict"]["key"]
+            conflict_key = engine.decide("Please answer the user question.", agent="codex")["conflict"]["key"]
 
             response = handle_request(
                 {
@@ -103,16 +103,16 @@ class DecisionConflictTests(unittest.TestCase):
 def _write_conflicting_store(store: Path) -> list[PreferenceRecord]:
     records = [
         PreferenceRecord(
-            title="详细回复",
-            applies_to="回复用户问题时",
-            preference="回复用户问题时，回答要详细展开，充分解释。",
+            title="Detailed replies",
+            applies_to="When replying to user questions",
+            preference="When replying to user questions, answer with detailed full explanations.",
             status="active",
             confidence="high",
         ),
         PreferenceRecord(
-            title="简洁回复",
-            applies_to="回复用户问题时",
-            preference="回复用户问题时，回答要简洁短一点，不要长文。",
+            title="Concise replies",
+            applies_to="When replying to user questions",
+            preference="When replying to user questions, keep answers concise and short; avoid long-form explanations.",
             status="active",
             confidence="high",
         ),

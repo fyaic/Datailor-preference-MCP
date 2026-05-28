@@ -1,64 +1,66 @@
-# 初次捕获与增量捕获设计
+# Initial And Incremental Capture Design
 
-## 冷启动
+## Cold Start
 
-新安装时用户级数据目录中的 `个人偏好.md` 只包含结构，不包含任何真实偏好。默认位置为 Windows `%APPDATA%\Datailor\个人偏好.md`，macOS `~/Library/Application Support/Datailor/个人偏好.md`，Linux `${XDG_DATA_HOME:-~/.local/share}/datailor/个人偏好.md`。此时：
+On a new installation, `personal-preferences.md` in the user data directory contains only structure and no real preferences. Default locations are Windows `%APPDATA%\Datailor\personal-preferences.md`, macOS `~/Library/Application Support/Datailor/personal-preferences.md`, and Linux `${XDG_DATA_HOME:-~/.local/share}/datailor/personal-preferences.md`.
 
-- `decide` 返回 `decision: no_preference`。
-- agent 应按原流程询问用户或继续当前任务。
-- session 结束后，用户可以把对话记录交给 `capture`，系统从真实回答中生成第一批偏好。
+In this state:
 
-## 初次捕获
+- `decide` returns `decision: no_preference`.
+- Agents should continue normal workflow or ask the user when needed.
+- After a session ends, the user can pass chat records to `capture`; the system generates the first preferences from real answers.
 
-输入可以是单个文件，也可以是目录：
+## Initial Capture
 
-- Kimi 导出的 Markdown/JSON/TXT。
-- Codex 或 OpenClaw 的本地会话记录。
-- 手动整理的 session 片段。
+Input can be one file or a directory:
 
-处理流程：
+- Kimi exported Markdown / JSON / TXT.
+- Local Codex or OpenClaw session records.
+- Manually curated session fragments.
+
+Pipeline:
 
 ```text
-读取文件
-  -> 归一化为 role/content messages
-  -> 模型提取候选偏好
-  -> 与空偏好库合并
-  -> 写入人类可读的 Markdown 偏好条目
+read files
+  -> normalize into role/content messages
+  -> model extracts preference candidates
+  -> merge with empty store
+  -> write human-readable Markdown preferences
 ```
 
-提取标准：
+Extraction standards:
 
-- 只提取稳定、可复用的 agent 行为偏好。
-- 每条偏好必须有证据 quote。
-- 不把一次性任务事实当偏好。
-- 不把没有用户表达支撑的推测当偏好。
+- Extract only stable, reusable agent-behavior preferences.
+- Every preference must have an evidence quote.
+- Do not treat one-off task facts as preferences.
+- Do not infer preferences without user expression support.
 
-## 增量捕获
+## Incremental Capture
 
-增量捕获不是简单追加，而是四类合并：
+Incremental capture is not append-only. It performs four merge actions:
 
-| 动作 | 条件 | 结果 |
-|------|------|------|
-| new | 没有同类意图 | 新增偏好 |
-| merge | 同类且一致 | 追加证据，增强置信 |
-| replace | 用户明确表达“以后/改成/从现在开始” | 更新主偏好 |
-| conflict | 同类但不确定是否变化 | 标记 `needs_review`，保留冲突证据 |
+| Action | Condition | Result |
+| --- | --- | --- |
+| new | No same-intent preference exists | Add a new preference |
+| merge | Same intent and consistent | Append evidence and strengthen confidence |
+| replace | User explicitly said "from now on", "change to", or similar | Update the primary preference |
+| conflict | Same intent but uncertain change | Mark `needs_review` and keep conflict evidence |
 
-## Kimi 原始数据捕获建议
+## Kimi Raw Data Capture Recommendation
 
-优先使用导出文件或本地可读历史，而不是屏幕抓取：
+Prefer exported files or locally readable history over screen scraping:
 
-1. 找到 Kimi 历史导出目录或手动导出一批高价值对话。
-2. 保持每个 session 一个文件，文件名带日期和主题。
-3. 先抽样 20 个 session 做质量验证。
-4. 通过 `capture --dry-run` 看候选数量，再正式写入。
-5. 对误提取样本，调整模型 prompt 或增加负例，不直接手工改规则。
+1. Locate Kimi history export directories or manually export a high-value set of conversations.
+2. Keep one session per file, with date and topic in the filename.
+3. Sample 20 sessions for quality validation first.
+4. Use `capture --dry-run` to inspect candidate counts before writing.
+5. For false positives, adjust model prompts or add negative examples; do not patch rules manually first.
 
-## 质量抽检
+## Quality Sampling
 
-每批捕获后抽检：
+After each capture batch, sample-check:
 
-- 偏好是否真实来自用户表达。
-- 是否写清适用场景、触发意图、例外条件。
-- 是否存在把临时任务误判为长期偏好的情况。
-- 中文和 Markdown 结构是否完整。
+- Whether the preference truly comes from user expression.
+- Whether scope, trigger intent, and exceptions are clear.
+- Whether temporary tasks were incorrectly classified as long-term preferences.
+- Whether Markdown structure is complete.
