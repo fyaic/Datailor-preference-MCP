@@ -14,35 +14,35 @@ from .quality import has_guidance_terms, has_stable_signal, looks_like_one_off_t
 from .refinement import conflict_likely
 from .session_loader import load_sessions
 from .store import MarkdownPreferenceStore
-from .weave_models import ApplyChange, ApplyPlan, InsightRecord, RotSuggestion, WeaveInstruction, WeaveJobResult
-from .weave_report import render_weave_report
-from .weave_store import WeaveJobStore
+from .fitting_models import ApplyChange, ApplyPlan, InsightRecord, RotSuggestion, FittingInstruction, FittingJobResult
+from .fitting_report import render_fitting_report
+from .fitting_store import FittingJobStore
 
 
 @dataclass(frozen=True)
-class WeaveInput:
+class FittingInput:
     source: str
     text: str
     role: str = "user"
 
 
-def run_weave(
+def run_fitting(
     store_path: str | Path,
     instructions: str = "",
     instructions_file: str | Path | None = None,
     source: str | Path | None = None,
     agent: str = "agent",
-    weave_dir: str | Path | None = None,
+    fitting_dir: str | Path | None = None,
     dry_run: bool = False,
     review: bool = True,
     max_files: int = 0,
-) -> WeaveJobResult:
+) -> FittingJobResult:
     instruction_text = _instruction_text(instructions, instructions_file)
-    instruction = WeaveInstruction.from_text(instruction_text, source="file" if instructions_file else "cli")
+    instruction = FittingInstruction.from_text(instruction_text, source="file" if instructions_file else "cli")
     store = MarkdownPreferenceStore(store_path)
     store.ensure()
     records = store.load()
-    job_store = WeaveJobStore(weave_dir)
+    job_store = FittingJobStore(fitting_dir)
     paths = job_store.new_job_paths()
     job_store.write_status(paths, "running", {"agent": agent, "review": review, "dry_run": dry_run})
 
@@ -52,7 +52,7 @@ def run_weave(
     rot_suggestions = analyze_memory_rot(records, feedback_report())
     apply_plan = build_apply_plan(paths.job_id, insights, rot_suggestions)
     stats = _stats(inputs, ignored_inputs, insights, rot_suggestions)
-    result = WeaveJobResult(
+    result = FittingJobResult(
         job_id=paths.job_id,
         status="completed",
         store_file=str(store.path),
@@ -67,11 +67,11 @@ def run_weave(
         inputs=_input_labels(inputs),
         ignored_inputs=ignored_inputs,
         next_commands=[
-            f"datailor weave-show {paths.job_id}",
-            f"datailor weave-apply {paths.job_id} --accept <change-id>",
+            f"datailor fitting-show {paths.job_id}",
+            f"datailor fitting-apply {paths.job_id} --accept <change-id>",
         ],
     )
-    report = render_weave_report(result)
+    report = render_fitting_report(result)
     if not dry_run:
         job_store.ensure_job_dir(paths)
         paths.report_file.write_text(report, encoding="utf-8")
@@ -83,7 +83,7 @@ def run_weave(
     return result
 
 
-def extract_insights(inputs: list[WeaveInput]) -> list[InsightRecord]:
+def extract_insights(inputs: list[FittingInput]) -> list[InsightRecord]:
     insights: list[InsightRecord] = []
     for item in inputs:
         for sentence in _sentences(item.text):
@@ -214,15 +214,15 @@ def build_apply_plan(job_id: str, insights: list[InsightRecord], suggestions: li
     return ApplyPlan(job_id=job_id, changes=changes)
 
 
-def apply_weave_plan(
+def apply_fitting_plan(
     job_id: str,
     accepted_change_ids: list[str],
     store_path: str | Path,
-    weave_dir: str | Path | None = None,
+    fitting_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     if not accepted_change_ids:
         return {"ok": False, "error": "accepted_change_ids_required", "job_id": job_id, "applied": []}
-    job_store = WeaveJobStore(weave_dir)
+    job_store = FittingJobStore(fitting_dir)
     result = job_store.read_result(job_id)
     plan = job_store.read_apply_plan(job_id)
     accepted = set(accepted_change_ids)
@@ -276,16 +276,16 @@ def apply_weave_plan(
     }
 
 
-def get_weave_job(job_id: str, weave_dir: str | Path | None = None) -> dict[str, Any]:
-    return WeaveJobStore(weave_dir).read_result(job_id).to_dict()
+def get_fitting_job(job_id: str, fitting_dir: str | Path | None = None) -> dict[str, Any]:
+    return FittingJobStore(fitting_dir).read_result(job_id).to_dict()
 
 
-def list_weave_jobs(weave_dir: str | Path | None = None, limit: int = 20) -> dict[str, Any]:
-    return {"ok": True, "jobs": WeaveJobStore(weave_dir).list_jobs(limit=limit)}
+def list_fitting_jobs(fitting_dir: str | Path | None = None, limit: int = 20) -> dict[str, Any]:
+    return {"ok": True, "jobs": FittingJobStore(fitting_dir).list_jobs(limit=limit)}
 
 
-def latest_weave(weave_dir: str | Path | None = None) -> dict[str, Any]:
-    result = WeaveJobStore(weave_dir).latest_result()
+def latest_fitting(fitting_dir: str | Path | None = None) -> dict[str, Any]:
+    result = FittingJobStore(fitting_dir).latest_result()
     return {"ok": True, "job": result.to_dict() if result else None}
 
 
@@ -296,8 +296,8 @@ def _instruction_text(instructions: str, instructions_file: str | Path | None) -
     return "\n".join(part for part in parts if part)
 
 
-def _collect_inputs(records: list[PreferenceRecord], source: str | Path | None, max_files: int) -> list[WeaveInput]:
-    inputs: list[WeaveInput] = []
+def _collect_inputs(records: list[PreferenceRecord], source: str | Path | None, max_files: int) -> list[FittingInput]:
+    inputs: list[FittingInput] = []
     if source:
         sessions = load_sessions(source)
         files_seen: set[str] = set()
@@ -308,17 +308,17 @@ def _collect_inputs(records: list[PreferenceRecord], source: str | Path | None, 
                 break
             for message in session.messages:
                 if message.role == "user":
-                    inputs.append(WeaveInput(source=session.source, text=message.content, role=message.role))
+                    inputs.append(FittingInput(source=session.source, text=message.content, role=message.role))
     for record in records:
-        inputs.append(WeaveInput(source=f"store:{record.id}", text=_record_text(record), role="preference"))
+        inputs.append(FittingInput(source=f"store:{record.id}", text=_record_text(record), role="preference"))
     return inputs
 
 
 def _apply_instruction_filter(
-    inputs: list[WeaveInput],
-    instruction: WeaveInstruction,
-) -> tuple[list[WeaveInput], list[dict[str, str]]]:
-    kept: list[WeaveInput] = []
+    inputs: list[FittingInput],
+    instruction: FittingInstruction,
+) -> tuple[list[FittingInput], list[dict[str, str]]]:
+    kept: list[FittingInput] = []
     ignored: list[dict[str, str]] = []
     for item in inputs:
         text = item.text
@@ -332,7 +332,7 @@ def _apply_instruction_filter(
     return kept, ignored
 
 
-def _ignored_by_one_off_instruction(text: str, instruction: WeaveInstruction) -> bool:
+def _ignored_by_one_off_instruction(text: str, instruction: FittingInstruction) -> bool:
     ignore_blob = " ".join(instruction.ignore).casefold()
     if not ignore_blob:
         return False
@@ -386,7 +386,7 @@ def _looks_like_tool_quirk(text: str) -> bool:
     return bool(re.search(r"(PowerShell|MCP|CLI|pipx|终端|工具|Obsidian|Linear|Kimi|Codex|Windows|UI|quirk)", text, re.I))
 
 
-def _insight_from_text(kind: str, text: str, item: WeaveInput) -> InsightRecord:
+def _insight_from_text(kind: str, text: str, item: FittingInput) -> InsightRecord:
     title_prefix = {
         "preference": "偏好",
         "workflow": "工作流",
@@ -432,7 +432,7 @@ def _has_similar_insight(candidate: InsightRecord, existing: list[InsightRecord]
 
 
 def _stats(
-    inputs: list[WeaveInput],
+    inputs: list[FittingInput],
     ignored: list[dict[str, str]],
     insights: list[InsightRecord],
     suggestions: list[RotSuggestion],
@@ -447,7 +447,7 @@ def _stats(
     }
 
 
-def _input_labels(inputs: list[WeaveInput]) -> list[str]:
+def _input_labels(inputs: list[FittingInput]) -> list[str]:
     labels: list[str] = []
     for item in inputs:
         label = item.source

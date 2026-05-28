@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from .weave_models import InsightRecord, RotSuggestion, WeaveJobResult
+from .fitting_models import InsightRecord, RotSuggestion, FittingJobResult
 
 
-def render_weave_report(result: WeaveJobResult) -> str:
+def render_fitting_report(result: FittingJobResult) -> str:
     stats = result.stats
     lines: list[str] = [
-        "# Datailor Weave Report",
+        "# Datailor Fitting Report",
         "",
         "## Summary",
         "",

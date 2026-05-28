@@ -13,13 +13,13 @@ from preference_agent.mcp_server import handle_request
 from preference_agent.models import PreferenceRecord
 from preference_agent.store import MarkdownPreferenceStore
 from preference_agent.ui.server import build_manifesto
-from preference_agent.weave import analyze_memory_rot, apply_weave_plan, run_weave
-from preference_agent.weave_models import WeaveInstruction
+from preference_agent.fitting import analyze_memory_rot, apply_fitting_plan, run_fitting
+from preference_agent.fitting_models import FittingInstruction
 
 
-class WeaveTests(unittest.TestCase):
+class FittingTests(unittest.TestCase):
     def test_instruction_parses_focus_and_ignore(self) -> None:
-        instruction = WeaveInstruction.from_text(
+        instruction = FittingInstruction.from_text(
             "focus on UI writing preferences; ignore one-off install commands"
         )
 
@@ -28,12 +28,12 @@ class WeaveTests(unittest.TestCase):
         self.assertTrue(instruction.matches_focus("The user has UI copy writing preferences."))
         self.assertTrue(instruction.should_ignore("This is a one-off install command."))
 
-    def test_run_weave_generates_typed_report_without_modifying_store(self) -> None:
+    def test_run_fitting_generates_typed_report_without_modifying_store(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             store_path = root / "prefs.md"
             source_path = root / "history.md"
-            weave_dir = root / ".weave"
+            fitting_dir = root / ".fitting"
             store = MarkdownPreferenceStore(store_path)
             store.save(
                 [
@@ -59,11 +59,11 @@ class WeaveTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = run_weave(
+            result = run_fitting(
                 store_path=store_path,
                 source=source_path,
                 instructions="ignore one-off install commands",
-                weave_dir=weave_dir,
+                fitting_dir=fitting_dir,
             )
 
             self.assertEqual(result.status, "completed")
@@ -141,23 +141,23 @@ class WeaveTests(unittest.TestCase):
         self.assertIn("conflict", types)
         self.assertIn("negative_feedback", types)
 
-    def test_apply_weave_plan_applies_only_accepted_changes(self) -> None:
+    def test_apply_fitting_plan_applies_only_accepted_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             store_path = root / "prefs.md"
             source_path = root / "history.md"
-            weave_dir = root / ".weave"
+            fitting_dir = root / ".fitting"
             store = MarkdownPreferenceStore(store_path)
             store.ensure()
             source_path.write_text("用户: 以后修改代码后，默认先跑相关测试再交付。", encoding="utf-8")
-            result = run_weave(store_path=store_path, source=source_path, weave_dir=weave_dir)
+            result = run_fitting(store_path=store_path, source=source_path, fitting_dir=fitting_dir)
             change = next(item for item in result.apply_plan.changes if item.type == "add_preference")
 
-            applied = apply_weave_plan(
+            applied = apply_fitting_plan(
                 job_id=result.job_id,
                 accepted_change_ids=[change.change_id],
                 store_path=store_path,
-                weave_dir=weave_dir,
+                fitting_dir=fitting_dir,
             )
 
             self.assertTrue(applied["ok"])
@@ -167,7 +167,7 @@ class WeaveTests(unittest.TestCase):
             self.assertEqual(records[0].status, "needs_review")
             self.assertIn("测试", records[0].preference)
 
-    def test_cli_weave_outputs_json_and_human_report_path(self) -> None:
+    def test_cli_fitting_outputs_json_and_human_report_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             source = root / "history.md"
@@ -177,11 +177,11 @@ class WeaveTests(unittest.TestCase):
                 [
                     "--store",
                     str(root / "prefs.md"),
-                    "weave",
+                    "fitting",
                     "--source",
                     str(source),
-                    "--weave-dir",
-                    str(root / ".weave"),
+                    "--fitting-dir",
+                    str(root / ".fitting"),
                     "--instructions",
                     "ignore one-off install commands",
                     "--json",
@@ -192,22 +192,22 @@ class WeaveTests(unittest.TestCase):
             self.assertEqual(out["status"], "completed")
             self.assertTrue(Path(out["report_file"]).exists())
 
-    def test_mcp_weave_tools_and_ui_latest_report(self) -> None:
+    def test_mcp_fitting_tools_and_ui_latest_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             source = root / "history.md"
             store = root / "prefs.md"
-            weave_dir = root / ".weave"
+            fitting_dir = root / ".fitting"
             source.write_text("用户: 以后修改代码后，默认先跑相关测试再交付。", encoding="utf-8")
             engine = build_mcp_engine(store)
-            with patch.dict("os.environ", {"DATAILOR_WEAVE_DIR": str(weave_dir)}, clear=False):
+            with patch.dict("os.environ", {"DATAILOR_FITTING_DIR": str(fitting_dir)}, clear=False):
                 started = handle_request(
                     {
                         "jsonrpc": "2.0",
                         "id": 1,
                         "method": "tools/call",
                         "params": {
-                            "name": "start_weave_consolidation",
+                            "name": "start_fitting_consolidation",
                             "arguments": {
                                 "source": str(source),
                                 "instructions": "ignore one-off install commands",
@@ -223,9 +223,9 @@ class WeaveTests(unittest.TestCase):
                 self.assertEqual(payload["status"], "completed")
 
                 latest = build_manifesto(store_path=store)
-                self.assertIn("weave", latest)
-                self.assertIsNotNone(latest["weave"])
-                self.assertEqual(latest["weave"]["job_id"], payload["job_id"])
+                self.assertIn("fitting", latest)
+                self.assertIsNotNone(latest["fitting"])
+                self.assertEqual(latest["fitting"]["job_id"], payload["job_id"])
 
 
 def _run_cli(argv: list[str]) -> dict:

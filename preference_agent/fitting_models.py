@@ -37,7 +37,7 @@ ROT_ACTIONS = {
 
 
 @dataclass
-class WeaveInstruction:
+class FittingInstruction:
     text: str = ""
     focus: list[str] = field(default_factory=list)
     ignore: list[str] = field(default_factory=list)
@@ -47,7 +47,7 @@ class WeaveInstruction:
     created_at: str = field(default_factory=now_iso)
 
     @classmethod
-    def from_text(cls, text: str = "", source: str = "cli", max_chars: int = 4096) -> "WeaveInstruction":
+    def from_text(cls, text: str = "", source: str = "cli", max_chars: int = 4096) -> "FittingInstruction":
         normalized = " ".join(str(text or "").split())
         truncated = False
         if len(normalized) > max_chars:
@@ -64,7 +64,7 @@ class WeaveInstruction:
         )
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "WeaveInstruction":
+    def from_dict(cls, data: dict[str, Any]) -> "FittingInstruction":
         return cls(
             text=str(data.get("text") or ""),
             focus=_string_list(data.get("focus")),
@@ -235,14 +235,14 @@ class ApplyPlan:
 
 
 @dataclass
-class WeaveJobResult:
+class FittingJobResult:
     job_id: str
     status: str
     store_file: str
     job_dir: str
     report_file: str
     result_file: str
-    instructions: WeaveInstruction
+    instructions: FittingInstruction
     insights: list[InsightRecord] = field(default_factory=list)
     rot_suggestions: list[RotSuggestion] = field(default_factory=list)
     apply_plan: ApplyPlan | None = None
@@ -254,7 +254,7 @@ class WeaveJobResult:
     created_at: str = field(default_factory=now_iso)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "WeaveJobResult":
+    def from_dict(cls, data: dict[str, Any]) -> "FittingJobResult":
         return cls(
             job_id=str(data.get("job_id") or ""),
             status=str(data.get("status") or ""),
@@ -262,7 +262,7 @@ class WeaveJobResult:
             job_dir=str(data.get("job_dir") or ""),
             report_file=str(data.get("report_file") or ""),
             result_file=str(data.get("result_file") or ""),
-            instructions=WeaveInstruction.from_dict(data.get("instructions") if isinstance(data.get("instructions"), dict) else {}),
+            instructions=FittingInstruction.from_dict(data.get("instructions") if isinstance(data.get("instructions"), dict) else {}),
             insights=[
                 InsightRecord.from_dict(item)
                 for item in data.get("insights", [])

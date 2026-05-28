@@ -25,7 +25,7 @@ from ..paths import default_ui_dir as default_user_ui_dir
 from ..preference_actions import apply_preference_feedback
 from ..privacy import redact_sensitive
 from ..store import MarkdownPreferenceStore
-from ..weave import latest_weave
+from ..fitting import latest_fitting
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -140,7 +140,7 @@ def build_manifesto(
             "summary": injection_log_summary(injection_events),
             "items": injection_events,
         },
-        "weave": latest_weave().get("job"),
+        "fitting": latest_fitting().get("job"),
     }
 
 
@@ -287,8 +287,8 @@ def _make_handler(config: UiConfig) -> type[BaseHTTPRequestHandler]:
                 )
                 self._json(HTTPStatus.OK, payload)
                 return
-            if path == "/api/weave/latest":
-                self._json(HTTPStatus.OK, latest_weave())
+            if path == "/api/fitting/latest":
+                self._json(HTTPStatus.OK, latest_fitting())
                 return
             self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
 
