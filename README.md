@@ -4,6 +4,8 @@
 
 # Datailor Preference MCP
 
+→ **[datailor.space](https://datailor.space/)**
+
 Datailor is a local-first personal preference MCP for AI agents. It extracts stable, reusable user preferences from chat history and runtime hooks, stores them in the human-readable `personal-preferences.md`, and exposes them through MCP tools, a CLI, an AGENTS managed block, and a local Manifesto UI.
 
 The V0 goal is not to remember everything. It validates a controlled workflow:
@@ -465,3 +467,9 @@ python -m pytest -q
 ```
 
 Current regression: `112 passed`.
+
+## Author
+
+Datailor is built and maintained by Rosetta Zidian Guo and her team.
+
+The original idea was contributed by Dr. Ren Diao.
