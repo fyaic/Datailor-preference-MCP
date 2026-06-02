@@ -36,9 +36,11 @@ class PreferenceEngineTests(unittest.TestCase):
             self.assertGreaterEqual(result.candidates_seen, 2)
             records = MarkdownPreferenceStore(store).load()
             self.assertGreaterEqual(len(records), 2)
+            self.assertGreater(sum(len(record.evidence) for record in records), 0)
+            self.assertTrue(any(item.session_id for record in records for item in record.evidence))
             text = store.read_text(encoding="utf-8")
             self.assertIn("verification", text.casefold())
-            self.assertNotIn("```json preference-record", text)
+            self.assertIn("```json preference-record", text)
             self.assertIn("## Active Preferences", text)
 
     def test_semantic_decision_matches_variant_task(self) -> None:
@@ -102,6 +104,24 @@ class PreferenceEngineTests(unittest.TestCase):
 
             self.assertEqual(len(result.added), 1)
             self.assertEqual(MarkdownPreferenceStore(store).load(), [])
+
+    def test_capture_chinese_preference_keeps_session_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            store = Path(temp) / "prefs.md"
+            engine = self.make_engine(store)
+            session = Session(
+                source="kimi-history.jsonl#1",
+                session_id="kimi-session-a",
+                messages=[SessionMessage(role="user", content="以后回复请简洁分点，重要结论先说，不要大段平铺。")],
+            )
+
+            result = engine.capture_session(session)
+            records = MarkdownPreferenceStore(store).load()
+
+            self.assertEqual(len(result.added), 1)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(len(records[0].evidence), 1)
+            self.assertEqual(records[0].evidence[0].session_id, "kimi-session-a")
 
     def test_mcp_tools_call_decide(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

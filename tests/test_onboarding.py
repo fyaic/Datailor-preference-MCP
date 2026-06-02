@@ -205,6 +205,23 @@ class OnboardingTests(unittest.TestCase):
             self.assertEqual(config.candidate_dir, data_dir / ".debug-capture")
             self.assertEqual(engine.store.path, data_dir / "personal-preferences.md")
 
+    def test_default_store_prefers_existing_legacy_store_when_default_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            data_dir = root / "Datailor"
+            data_dir.mkdir()
+            (data_dir / "personal-preferences.md").write_text(
+                "# Personal Preferences\n\n## Active Preferences\n\nNo active preferences yet.\n",
+                encoding="utf-8",
+            )
+            legacy = data_dir / "个人偏好.md"
+            legacy.write_text(
+                "# Personal Preferences\n\n## Active Preferences\n\n- Prefer direct answers.\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"DATAILOR_DATA_DIR": str(data_dir), "PREFERENCE_STORE_PATH": ""}, clear=False):
+                self.assertEqual(default_store_path(), legacy)
+
     def test_mcp_config_uses_datailor_mcp_command_without_repo_cwd(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

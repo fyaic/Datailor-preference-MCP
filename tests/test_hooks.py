@@ -146,6 +146,56 @@ class PreferenceHookTests(unittest.TestCase):
             )
             self.assertIn("buffered", response["result"]["content"][0]["text"])
 
+    def test_mcp_action_hook_compacts_capture_metadata_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            engine = PreferenceEngine(MarkdownPreferenceStore(root / "prefs.md"), backend=HeuristicBackend())
+
+            compact = handle_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "hook_action_executed",
+                        "arguments": {
+                            "agent": "codex",
+                            "session_id": "s5",
+                            "action": "run_tests_before_done",
+                            "result": "pytest passed before reporting completion",
+                        },
+                    },
+                },
+                engine,
+            )
+            compact_text = compact["result"]["content"][0]["text"]
+            compact_payload = json.loads(compact_text)
+
+            self.assertTrue(compact_payload["captured"])
+            self.assertIn("capture", compact_payload)
+            self.assertIn("added_count", compact_payload["capture"])
+            self.assertNotIn("executive_summary_file", compact_text)
+
+            debug = handle_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "hook_action_executed",
+                        "arguments": {
+                            "agent": "codex",
+                            "session_id": "s5",
+                            "action": "run_tests_before_done",
+                            "result": "pytest passed before reporting completion",
+                            "include_debug": True,
+                        },
+                    },
+                },
+                engine,
+            )
+            self.assertIn("executive_summary_file", debug["result"]["content"][0]["text"])
+
     def test_kimi_hook_runner_maps_lifecycle_events_to_datailor_hooks(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -313,6 +313,18 @@ Long-running captures can be repeated safely. The runner uses `.capture-state\*.
 
 Kimi Code `user-history` JSONL often contains only a `content` field and no `role` field. Datailor treats content-only JSONL as user input.
 
+## Preference Store Capacity
+
+The canonical `personal-preferences.md` store is capped at 50 counted preferences by default. Override the limit with `PREFERENCE_STORE_MAX_RECORDS` when testing or operating a different policy:
+
+```powershell
+$env:PREFERENCE_STORE_MAX_RECORDS = "50"
+```
+
+The cap is not a blind truncation step. Before writing the store, Datailor first merges exact or near-exact duplicates and preserves evidence on the surviving record. If the store still exceeds the cap, lower-value records are kept out of the canonical active set and written to a local `*.cap-review.jsonl` artifact for review. Capture results, Fitting apply results, and the Manifesto API expose cap summaries such as `limit`, `before_count`, `after_count`, `review_required`, and review-candidate counts.
+
+Fitting also treats cap pressure as memory rot. It proposes review-first consolidation actions so the long-term store stays compact through merge, archive, or generalized preference rewrites instead of accumulating low-value one-off rules.
+
 ## Model Configuration
 
 The default backend is `heuristic` and does not require an API. Use OpenAI-compatible settings for cloud or local models:
@@ -402,6 +414,8 @@ MCP exposes preference decisions, cold-start capture, feedback, hooks, conflict 
 | `apply_fitting_plan` | Apply explicitly accepted Fitting changes |
 
 All `decide` / hook / prewarm calls write injection logs. The Manifesto UI Injection Log shows time, agent, session, matched preferences, and the actual injected `agent_instruction`.
+
+Runtime MCP hooks return a compact visible payload by default: the decision, complete `agent_instruction`, match count, short matched preference list, and small summaries for capture/sync work. Internal metadata such as confidence factors, prewarm internals, capture details, and auto-discovery file lists remains available by calling the same tool with `include_debug=true`. Datailor does not truncate the visible `agent_instruction`; if an instruction is shown, it is the full executable instruction for that turn.
 
 Static injection artifacts can be generated manually:
 

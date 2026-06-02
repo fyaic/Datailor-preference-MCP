@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from uuid import uuid5, NAMESPACE_URL
 
+from .capacity import ARCHIVED_STATUSES, enforce_preference_cap, write_cap_review_artifact
 from .models import PreferenceRecord
 from .privacy import redact_sensitive
 from .snapshots import create_store_snapshot
@@ -45,8 +46,13 @@ class MarkdownPreferenceStore:
         if not self.path.exists():
             return []
         text = self.path.read_text(encoding="utf-8")
+        structured = self._load_structured_records(text)
+        if structured:
+            return structured
+        return self._load_simple_bullets(text)
+
+    def _load_structured_records(self, text: str) -> list[PreferenceRecord]:
         records: list[PreferenceRecord] = []
-        records.extend(self._load_simple_bullets(text))
         for match in RECORD_RE.finditer(text):
             raw = match.group(1)
             try:
@@ -60,12 +66,19 @@ class MarkdownPreferenceStore:
     def save(self, records: list[PreferenceRecord]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         create_store_snapshot(self.path, reason="pre-save")
-        text = self._render(records)
+        cap = enforce_preference_cap(records, mode="safe")
+        if cap.review_required or cap.merged:
+            write_cap_review_artifact(self.path, cap)
+        text = self._render(cap.records)
         self.path.write_text(text, encoding="utf-8")
 
     def _render(self, records: list[PreferenceRecord]) -> str:
         active = [_statement(record) for record in records if record.status == "active"]
-        observed = [_statement(record) for record in records if record.status != "active"]
+        observed = [
+            _statement(record)
+            for record in records
+            if record.status != "active" and str(record.status or "").casefold() not in ARCHIVED_STATUSES
+        ]
         active = _unique(active)
         observed = _unique(observed)
         lines: list[str] = [
@@ -83,7 +96,16 @@ class MarkdownPreferenceStore:
             lines.extend(f"- {item}" for item in observed)
         else:
             lines.append("No observed preferences yet.")
-        lines.append("")
+        lines.extend(["", PREF_START])
+        for record in records:
+            lines.extend(
+                [
+                    "```json preference-record",
+                    json.dumps(_redact_record_payload(record.to_dict()), ensure_ascii=False, indent=2, sort_keys=True),
+                    "```",
+                ]
+            )
+        lines.extend([PREF_END, ""])
         return "\n".join(lines)
 
     def _load_simple_bullets(self, text: str) -> list[PreferenceRecord]:
@@ -133,6 +155,16 @@ def _clean_statement(text: str) -> str:
 
 def _clean_text(text: str) -> str:
     return redact_sensitive(" ".join(str(text).split()).strip().rstrip("."))
+
+
+def _redact_record_payload(value: object) -> object:
+    if isinstance(value, str):
+        return redact_sensitive(value)
+    if isinstance(value, list):
+        return [_redact_record_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _redact_record_payload(item) for key, item in value.items()}
+    return value
 
 
 def _ensure_period(text: str) -> str:

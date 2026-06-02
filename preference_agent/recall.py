@@ -105,6 +105,7 @@ class RecallCandidate:
     content: str
     evidence_quote: str
     confidence: str
+    session_id: str = ""
     routes: list[str] = field(default_factory=list)
     scores: dict[str, float] = field(default_factory=dict)
     final_score: float = 0.0
@@ -211,6 +212,7 @@ class MultiRouteRecallEngine:
                     content=f"The user repeatedly made similar requests: {_truncate(sample.content, self.config.max_text_chars)}",
                     evidence_quote=sample.content,
                     confidence=_confidence(score),
+                    session_id=sample.session_id,
                     routes=["behavior"],
                     scores={"behavior": round(score, 4)},
                     final_score=score,
@@ -285,6 +287,7 @@ class MultiRouteRecallEngine:
             content=text,
             evidence_quote=text,
             confidence=_confidence(final_score),
+            session_id=item.session_id,
             routes=routes or ["fused"],
             scores=scores,
             final_score=round(final_score, 4),

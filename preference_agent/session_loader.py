@@ -20,6 +20,8 @@ ROLE_ALIASES = {
     "codex": "assistant",
     "openclaw": "assistant",
     "system": "system",
+    "tool": "system",
+    "model": "assistant",
 }
 
 
@@ -64,10 +66,13 @@ def _sessions_from_json(data: Any, source: str) -> list[Session]:
             sessions.extend(_sessions_from_json(item, child_source))
         return sessions
     if isinstance(data, dict):
+        # 优先探测内部消息列表，避免 content + messages 的 wrapper 只返回顶层 content
         for key in ("messages", "conversation", "conversations", "chat", "items"):
             value = data.get(key)
             if isinstance(value, list) and _looks_like_message_list(value):
                 return [_session_from_messages(source, value, data)]
+        if _message_content(data):
+            return [_session_from_messages(source, [data], data)]
         found = _find_message_lists(data)
         return [_session_from_messages(f"{source}:{index}", messages) for index, messages in enumerate(found)]
     return []
@@ -105,16 +110,23 @@ def _session_from_messages(
         content = _message_content(item)
         if not content:
             continue
-        role = _normalize_role(str(item.get("role") or item.get("sender") or item.get("author") or "user"))
+        role = _normalize_role(str(item.get("role") or item.get("sender") or item.get("author") or item.get("type") or item.get("kind") or item.get("source") or "user"))
         created_at = str(item.get("created_at") or item.get("time") or item.get("timestamp") or "")
         normalized.append(SessionMessage(role=role, content=content, created_at=created_at))
-    session_id = str((metadata or {}).get("id") or uuid5(NAMESPACE_URL, source))
+    session_id = str(
+        (metadata or {}).get("session_id")
+        or (metadata or {}).get("sessionId")
+        or (metadata or {}).get("conversation_id")
+        or (metadata or {}).get("chat_id")
+        or (metadata or {}).get("id")
+        or uuid5(NAMESPACE_URL, source)
+    )
     created_at = str((metadata or {}).get("created_at") or (normalized[0].created_at if normalized else ""))
     return Session(source=source, session_id=session_id, messages=normalized, created_at=created_at)
 
 
 def _message_content(item: dict[str, Any]) -> str:
-    for key in ("content", "text", "message", "value", "markdown"):
+    for key in ("content", "text", "message", "display", "value", "markdown"):
         value = item.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()

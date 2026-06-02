@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .backends import PreferenceModelBackend, build_backend
+from .capacity import CapResult, enforce_preference_cap, write_cap_review_artifact
 from .decision_conflicts import apply_decision_conflict_policy
 from .executive_summary import refresh_executive_summary
 from .injection_log import log_injection_event
@@ -29,6 +30,7 @@ class CaptureResult:
     executive_summary_file: str = ""
     executive_summary_updated: bool = False
     executive_summary_error: str = ""
+    cap: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -44,6 +46,7 @@ class CaptureResult:
             "executive_summary_file": self.executive_summary_file,
             "executive_summary_updated": self.executive_summary_updated,
             "executive_summary_error": self.executive_summary_error,
+            "cap": self.cap,
         }
 
 
@@ -86,6 +89,10 @@ class PreferenceEngine:
             changed = self._apply_candidate(candidate, existing, result)
             if changed is not None:
                 changed_records.append(changed)
+        cap = self._apply_cap(existing, result, dry_run=dry_run)
+        existing = cap.records
+        kept_ids = {record.id for record in existing}
+        changed_records = [record for record in changed_records if record.id in kept_ids]
         if not dry_run:
             self.store.save(existing)
             self._refresh_executive_summary(changed_records, result)
@@ -104,6 +111,8 @@ class PreferenceEngine:
         changed_records: list[PreferenceRecord] = []
         for session in sessions:
             extracted = self._extract(session)
+            for candidate in extracted:
+                self._attach_session_context(candidate, session)
             result.candidates_seen += len(extracted)
             candidates = refine_records(extracted)
             result.filtered_candidates += len(extracted) - len(candidates)
@@ -111,6 +120,10 @@ class PreferenceEngine:
                 changed = self._apply_candidate(candidate, records, result)
                 if changed is not None:
                     changed_records.append(changed)
+        cap = self._apply_cap(records, result, dry_run=dry_run)
+        records = cap.records
+        kept_ids = {record.id for record in records}
+        changed_records = [record for record in changed_records if record.id in kept_ids]
         if not dry_run:
             self.store.save(records)
             self._refresh_executive_summary(changed_records, result)
@@ -162,6 +175,13 @@ class PreferenceEngine:
                 return self.fallback_backend.extract_preferences(session)
             raise
 
+    def _attach_session_context(self, record: PreferenceRecord, session: Session) -> None:
+        for evidence in record.evidence:
+            if not evidence.source:
+                evidence.source = session.source
+            if not evidence.session_id:
+                evidence.session_id = session.session_id
+
     def _apply_candidate(
         self,
         candidate: PreferenceRecord,
@@ -197,6 +217,21 @@ class PreferenceEngine:
         records.append(candidate)
         result.added.append(candidate.id)
         return candidate
+
+    def _apply_cap(self, records: list[PreferenceRecord], result: CaptureResult, dry_run: bool = False) -> CapResult:
+        added_before_cap = list(result.added)
+        cap = enforce_preference_cap(records, mode="review-first")
+        records[:] = cap.records
+        if not dry_run and (cap.review_required or cap.merged):
+            write_cap_review_artifact(self.store.path, cap)
+        kept_ids = {record.id for record in cap.records}
+        result.added = [record_id for record_id in result.added if record_id in kept_ids]
+        added_removed = [record_id for record_id in added_before_cap if record_id not in kept_ids]
+        cap_data = cap.to_dict()
+        if added_removed:
+            cap_data["added_removed_by_cap"] = added_removed
+        result.cap = cap_data
+        return cap
 
     def _refresh_executive_summary(self, changed_records: list[PreferenceRecord], result: CaptureResult) -> None:
         try:

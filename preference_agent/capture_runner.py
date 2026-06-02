@@ -113,6 +113,7 @@ class CaptureCandidate:
     applies_to: str
     evidence_quote: str
     confidence: str
+    session_id: str = ""
     merge_action: str = "pending"
     context_hint: str = ""
     routes: list[str] = field(default_factory=list)
@@ -223,9 +224,9 @@ class CaptureRunner:
                 recall_buffer.append(
                     RecallInput(
                         source=f"{source_path}:{item['line']}",
-                        content=message["content"],
-                        context_hint=message.get("context_hint", ""),
-                        session_id=message.get("session_id", ""),
+                    content=message["content"],
+                    context_hint=message.get("context_hint", ""),
+                    session_id=message.get("session_id", ""),
                         turn_index=int(message.get("turn_index", item["line"])),
                     )
                 )
@@ -244,6 +245,7 @@ class CaptureRunner:
             elif _should_recall(message["content"]):
                 candidate = _candidate_from_user_message(
                     source=f"{source_path}:{item['line']}",
+                    session_id=message.get("session_id", ""),
                     content=message["content"],
                     context_hint=message.get("context_hint", ""),
                 )
@@ -373,6 +375,7 @@ class CaptureRunner:
                                 "role": "user",
                                 "content": content,
                                 "context_hint": context_hint,
+                                "session_id": str(message.get("session_id") or source_path),
                             },
                         }
 
@@ -394,6 +397,7 @@ class CaptureRunner:
                     applies_to=f"When the agent replies or executes tasks within the {scope} scope",
                     evidence_quote=block,
                     confidence="high",
+                    session_id=str(path),
                 )
 
     def _should_stop(self, start: float, result: CaptureJobResult) -> bool:
@@ -504,6 +508,8 @@ class CaptureRunner:
                 time.sleep(min(2 ** (attempt - 1), 8))
         if self.config.debug_output and self._use_model_extract():
             extracted_file.parent.mkdir(parents=True, exist_ok=True)
+        for record in extracted_records or []:
+            _attach_candidate_evidence_context(record, candidates)
         for record in refine_records(extracted_records or []):
             self._merge_record(record, result, records_store=records_store)
             if self.config.debug_output and self._use_model_extract():
@@ -595,6 +601,7 @@ class CaptureRunner:
                     source=item.source,
                     content=item.content,
                     context_hint=item.context_hint,
+                    session_id=item.session_id,
                 )
                 for item in inputs
                 if _should_recall(item.content)
@@ -723,9 +730,7 @@ def _extract_messages(data: Any) -> list[dict[str, str]]:
         return messages
     if not isinstance(data, dict):
         return []
-    direct = _message_from_object(data)
-    if direct:
-        return [direct]
+    # 优先探测内部消息列表，避免 content + messages 的 wrapper 只返回顶层 content
     for key in ("messages", "conversation", "chat", "items"):
         value = data.get(key)
         if isinstance(value, list):
@@ -734,24 +739,45 @@ def _extract_messages(data: Any) -> list[dict[str, str]]:
                 messages.extend(_extract_messages(item))
             if messages:
                 return messages
+    direct = _message_from_object(data)
+    if direct:
+        return [direct]
     return []
 
 
 def _message_from_object(data: dict[str, Any]) -> dict[str, str] | None:
-    role = data.get("role") or data.get("sender") or data.get("author") or data.get("from")
+    role = (
+        data.get("role")
+        or data.get("sender")
+        or data.get("author")
+        or data.get("from")
+        or data.get("type")
+        or data.get("kind")
+        or data.get("source")
+    )
+    session_id = data.get("session_id") or data.get("sessionId") or data.get("conversation_id") or data.get("chat_id") or data.get("id")
     content = (
         data.get("content")
         or data.get("text")
         or data.get("message")
+        or data.get("display")
         or data.get("markdown")
         or data.get("value")
     )
     if isinstance(content, list):
         content = "\n".join(str(item) for item in content if str(item).strip())
-    if role and isinstance(content, str) and content.strip():
-        return {"role": str(role), "content": content.strip()}
-    if not role and isinstance(content, str) and content.strip() and set(data.keys()).issubset({"content", "text", "message", "markdown", "value"}):
-        return {"role": "user", "content": content.strip()}
+    if isinstance(content, str) and content.strip():
+        # 收紧默认 user：如果没有任何 role 标识且 dict 含有 type/kind/source 等字段，
+        # 说明可能是 assistant/tool/system，不应默认 user
+        if not role:
+            has_structural_hint = any(k in data for k in ("type", "kind", "source"))
+            if has_structural_hint:
+                return None
+        return {
+            "role": str(role or "user"),
+            "content": content.strip(),
+            "session_id": str(session_id or ""),
+        }
     return None
 
 
@@ -768,7 +794,7 @@ def _should_recall(text: str) -> bool:
     return should_recall_user_text(text)
 
 
-def _candidate_from_user_message(source: str, content: str, context_hint: str = "") -> CaptureCandidate:
+def _candidate_from_user_message(source: str, content: str, context_hint: str = "", session_id: str = "") -> CaptureCandidate:
     content = redact_sensitive(content)
     return CaptureCandidate(
         candidate_id=str(uuid5(NAMESPACE_URL, f"{source}:{content}")),
@@ -779,6 +805,7 @@ def _candidate_from_user_message(source: str, content: str, context_hint: str = 
         applies_to="Candidate preference recalled from user history; merge only after model extraction or manual review",
         evidence_quote=_truncate(content, 1000),
         confidence="low",
+        session_id=session_id,
         context_hint=context_hint,
     )
 
@@ -793,11 +820,38 @@ def _capture_candidate_from_recall(candidate: RecallCandidate) -> CaptureCandida
         applies_to=candidate.applies_to,
         evidence_quote=candidate.evidence_quote,
         confidence=candidate.confidence,
+        session_id=candidate.session_id,
         context_hint=candidate.context_hint,
         routes=candidate.routes,
         scores=candidate.scores,
         final_score=candidate.final_score,
     )
+
+
+def _attach_candidate_evidence_context(record: Any, candidates: list[CaptureCandidate]) -> None:
+    if not candidates or not hasattr(record, "evidence"):
+        return
+    for evidence in record.evidence:
+        candidate = _matching_candidate_for_evidence(record, evidence, candidates)
+        if not candidate:
+            continue
+        if not getattr(evidence, "source", "") or "#candidates" in str(getattr(evidence, "source", "")):
+            evidence.source = candidate.source
+        if not getattr(evidence, "session_id", ""):
+            evidence.session_id = candidate.session_id or candidate.source
+
+
+def _matching_candidate_for_evidence(record: Any, evidence: Any, candidates: list[CaptureCandidate]) -> CaptureCandidate | None:
+    quote = str(getattr(evidence, "quote", "") or "").casefold()
+    preference = str(getattr(record, "preference", "") or "").casefold()
+    best = candidates[0] if len(candidates) == 1 else None
+    for candidate in candidates:
+        candidate_text = f"{candidate.preference} {candidate.evidence_quote}".casefold()
+        if quote and quote in candidate_text:
+            return candidate
+        if preference and preference in candidate_text:
+            return candidate
+    return best
 
 
 def _context_hint(content: str, previous_assistant: str) -> str:

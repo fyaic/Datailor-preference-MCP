@@ -69,6 +69,19 @@ class HeuristicBackend(PreferenceModelBackend):
         "prioritize",
         "prefer",
         "read back",
+        "从现在",
+        "以后",
+        "默认",
+        "每次",
+        "总是",
+        "必须",
+        "不要",
+        "我希望",
+        "我认为",
+        "我需要",
+        "偏好",
+        "优先",
+        "记住",
     )
     confirmation_markers = ("should we", "whether", "do you need", "would you like", "okay?", "confirm", "?")
     change_markers = ("from now on", "change to", "default to")
@@ -94,6 +107,7 @@ class HeuristicBackend(PreferenceModelBackend):
                             triggers=[content],
                             exceptions=["Escalate to the user when context changes materially, risk increases, or recent answers disagree."],
                             source=session.source,
+                            session_id=session.session_id,
                             quote=next_user.content,
                             confidence="medium",
                         )
@@ -112,6 +126,7 @@ class HeuristicBackend(PreferenceModelBackend):
                                 triggers=_infer_triggers(generalized),
                                 exceptions=_infer_exceptions(generalized),
                                 source=session.source,
+                                session_id=session.session_id,
                                 quote=sentence,
                                 confidence="medium",
                             )
@@ -239,11 +254,16 @@ class OpenAICompatibleBackend(PreferenceModelBackend):
                 item["evidence"] = [
                     {
                         "source": session.source,
+                        "session_id": session.session_id,
                         "quote": item.get("evidence_quote") or item.get("preference") or "",
                         "role": "user",
                         "source_type": "user_explicit",
                     }
                 ]
+            for evidence in item["evidence"]:
+                if isinstance(evidence, dict):
+                    evidence.setdefault("source", session.source)
+                    evidence.setdefault("session_id", session.session_id)
             records.append(PreferenceRecord.from_dict(item))
         return records
 
@@ -383,6 +403,7 @@ def _record(
     triggers: list[str],
     exceptions: list[str],
     source: str,
+    session_id: str,
     quote: str,
     confidence: str,
 ) -> PreferenceRecord:
@@ -394,7 +415,7 @@ def _record(
         triggers=unique_strings(triggers, limit=8),
         exceptions=unique_strings(exceptions, limit=8),
         confidence=confidence,
-        evidence=[Evidence(source=source, quote=quote, role="user", source_type="user_explicit")],
+        evidence=[Evidence(source=source, session_id=session_id, quote=quote, role="user", source_type="user_explicit")],
     )
 
 
@@ -501,8 +522,16 @@ def _generalize_preference(sentence: str, context: str = "") -> str:
         word in lowered for word in ("must", "always", "check", "confirm", "verify")
     ):
         return "After writing content to an external system, read back the content and verify text and Markdown structure."
+    if any(word in joined for word in ("回读", "外部系统", "乱码", "中文", "编码")) and any(
+        word in joined for word in ("必须", "每次", "确认", "检查", "验证")
+    ):
+        return "After writing content to an external system, read back the content and verify Chinese text, encoding, and Markdown structure."
     if any(word in lowered for word in ("test", "pytest", "verify", "verification")) and any(
         word in lowered for word in ("from now on", "default", "every time", "do not ask")
+    ):
+        return "After code or script changes, run relevant tests or verification by default; if they cannot run, explain why and provide alternative verification."
+    if any(word in joined for word in ("测试", "验证", "验收")) and any(
+        word in joined for word in ("从现在", "以后", "默认", "每次", "不要问", "必须")
     ):
         return "After code or script changes, run relevant tests or verification by default; if they cannot run, explain why and provide alternative verification."
     if "review" in lowered and (
@@ -513,6 +542,12 @@ def _generalize_preference(sentence: str, context: str = "") -> str:
         word in lowered for word in ("plan", "design", "deep", "discussion", "reusable", "complex", "decision", "organize")
     ):
         return "When deep discussion, solution design, or retrospective work produces reusable conclusions, ask whether to save them as Markdown documentation."
+    if any(word in joined for word in ("文档", "沉淀", "复盘", "保存结论")) and any(
+        word in joined for word in ("方案", "设计", "深度", "复杂", "决策", "复用", "整理")
+    ):
+        return "When deep discussion, solution design, or retrospective work produces reusable conclusions, ask whether to save them as Markdown documentation."
+    if any(word in joined for word in ("偏好", "上限", "50")) and any(word in joined for word in ("查重", "归纳", "概括", "含金量", "治理")):
+        return "Keep the canonical preference store capped and improve each preference through deduplication, merge, and concise generalization instead of accumulating low-value duplicates."
     if "Linear" in joined or "linear" in lowered or "issue" in lowered:
         if any(word in lowered for word in ("done", "completed", "phase", "record", "update", "read back")) and not looks_like_one_off_task(text):
             return "After a phase is completed, ask whether the Linear issue should be updated; read back external writes when applicable."
@@ -531,7 +566,11 @@ def _generalize_preference(sentence: str, context: str = "") -> str:
         return "When designing interaction animations or transitions, use slower motion and avoid overly fast jumps or ripple effects."
     if any(word in lowered for word in ("do not ask", "no confirmation", "stop asking", "just do it")):
         return "When the user has clearly asked for execution, avoid repeated confirmation; proceed when risk is controlled and report results."
+    if any(word in joined for word in ("不要询问", "不要反问", "直接执行", "由你负责")):
+        return "When the user has clearly asked for execution, avoid repeated confirmation; proceed when risk is controlled and report results."
     if any(word in lowered for word in ("concise", "brief", "two sentences", "less verbose", "no long answer", "bullets", "scannable")):
+        return "Prefer concise, bulleted, scannable replies and documents; avoid long unstructured paragraphs."
+    if any(word in joined for word in ("简洁", "分点", "要点", "易扫读", "不要冗长")):
         return "Prefer concise, bulleted, scannable replies and documents; avoid long unstructured paragraphs."
     if any(word in lowered for word in ("conclusion", "outline")) and any(word in lowered for word in ("from now on", "default", "every time", "first")):
         return "For complex questions, give the conclusion or outline first, then expand only as needed."
@@ -572,15 +611,23 @@ def _infer_applies_to(sentence: str) -> str:
     lowered = sentence.casefold()
     if any(word in lowered for word in ("git", "commit", "push", "branch", "code", "test", "review", "verify", "coverage")):
         return "When the agent changes code, completes implementation, or discusses test/review standards"
+    if any(word in sentence for word in ("代码", "测试", "验证", "验收", "评审")):
+        return "When the agent changes code, completes implementation, or discusses test/review standards"
     if "Linear" in sentence or "issue" in sentence.casefold():
         return "When the agent completes a phase and may need to update a Linear issue"
     if "english" in lowered and any(word in lowered for word in ("reply", "answer", "output")):
         return "When the agent replies to the user"
     if "read back" in lowered:
         return "After the agent writes content to an external system"
+    if "回读" in sentence or "外部系统" in sentence:
+        return "After the agent writes content to an external system"
     if "document" in lowered or "documentation" in lowered:
         return "When a discussion produces reusable decisions or plans"
+    if "文档" in sentence or "沉淀" in sentence:
+        return "When a discussion produces reusable decisions or plans"
     if any(word in lowered for word in ("concise", "bullets", "conclusion", "outline", "reply", "long-form")):
+        return "When the agent answers questions, reports results, or organizes long content"
+    if any(word in sentence for word in ("简洁", "分点", "结论", "大纲", "回复", "输出")):
         return "When the agent answers questions, reports results, or organizes long content"
     if any(word in lowered for word in ("repeated confirmation", "directly proceed")):
         return "When the user has clearly asked the agent to execute a task"
@@ -592,11 +639,17 @@ def _infer_triggers(sentence: str) -> list[str]:
     lowered = sentence.casefold()
     if any(word in lowered for word in ("code", "test", "review", "verify")):
         triggers.append("code completion, tests, review, verification")
+    if any(word in sentence for word in ("代码", "测试", "验证", "验收", "评审")):
+        triggers.append("code completion, tests, review, verification")
     if "Linear" in sentence or "issue" in sentence.casefold():
         triggers.append("task or phase completion")
     if "read back" in lowered:
         triggers.append("external content write")
+    if "回读" in sentence or "外部系统" in sentence:
+        triggers.append("external content write")
     if "document" in lowered or "documentation" in lowered:
+        triggers.append("deep discussion, solution design, retrospective")
+    if "文档" in sentence or "沉淀" in sentence:
         triggers.append("deep discussion, solution design, retrospective")
     return triggers or [sentence[:60]]
 
@@ -612,12 +665,19 @@ def _infer_exceptions(sentence: str) -> list[str]:
 def _dedupe_records(records: list[PreferenceRecord]) -> list[PreferenceRecord]:
     deduped: list[PreferenceRecord] = []
     for record in records:
-        if not any(
-            semantic_similarity(_scope_text(record), _scope_text(item)) > 0.82
-            and semantic_similarity(record.preference, item.preference) > 0.72
-            for item in deduped
-        ):
-            deduped.append(record)
+        match = next(
+            (
+                item
+                for item in deduped
+                if semantic_similarity(_scope_text(record), _scope_text(item)) > 0.82
+                and semantic_similarity(record.preference, item.preference) > 0.72
+            ),
+            None,
+        )
+        if match:
+            match.add_evidence_from(record)
+            continue
+        deduped.append(record)
     return deduped
 
 

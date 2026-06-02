@@ -116,7 +116,7 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
             )
             if auto_discovery:
                 result["auto_discovery"] = auto_discovery
-            return _tool_response(request_id, result)
+            return _runtime_tool_response(request_id, name, arguments, result)
         if name == "get_onboarding_status":
             result = get_onboarding_status(
                 store_path=engine.store.path,
@@ -186,7 +186,7 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
             payload = result.to_dict()
             if auto_discovery:
                 payload["auto_discovery"] = auto_discovery
-            return _tool_response(request_id, payload)
+            return _runtime_tool_response(request_id, name, arguments, payload)
         if name == "hook_session_start":
             manager = PreferenceHookManager(engine)
             auto_discovery = _maybe_auto_cold_start(
@@ -202,7 +202,7 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
             )
             if auto_discovery:
                 result["auto_discovery"] = auto_discovery
-            return _tool_response(request_id, result)
+            return _runtime_tool_response(request_id, name, arguments, result)
         if name == "hook_user_message":
             manager = PreferenceHookManager(engine)
             auto_discovery = _maybe_auto_cold_start(
@@ -217,7 +217,7 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
             )
             if auto_discovery:
                 result["auto_discovery"] = auto_discovery
-            return _tool_response(request_id, result)
+            return _runtime_tool_response(request_id, name, arguments, result)
         if name == "hook_turn_complete":
             manager = PreferenceHookManager(engine)
             result = manager.on_turn_complete(
@@ -228,7 +228,7 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
                 context=arguments.get("context") if isinstance(arguments.get("context"), dict) else {},
                 dry_run=bool(arguments.get("dry_run", False)),
             )
-            return _tool_response(request_id, result)
+            return _runtime_tool_response(request_id, name, arguments, result)
         if name == "hook_action_executed":
             manager = PreferenceHookManager(engine)
             result = manager.on_action_executed(
@@ -239,7 +239,7 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
                 metadata=arguments.get("metadata") if isinstance(arguments.get("metadata"), dict) else {},
                 dry_run=bool(arguments.get("dry_run", False)),
             )
-            return _tool_response(request_id, result)
+            return _runtime_tool_response(request_id, name, arguments, result)
         if name == "hook_session_end":
             manager = PreferenceHookManager(engine)
             messages = arguments.get("messages") if isinstance(arguments.get("messages"), list) else []
@@ -249,7 +249,7 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
                 messages=messages,
                 dry_run=bool(arguments.get("dry_run", False)),
             )
-            return _tool_response(request_id, result)
+            return _runtime_tool_response(request_id, name, arguments, result)
         if name == "sync_preference_injection":
             result = sync_injection_artifacts(
                 store_path=engine.store.path,
@@ -378,6 +378,290 @@ def _tool_response(request_id: Any, data: dict[str, Any]) -> dict[str, Any]:
             "isError": False,
         },
     )
+
+
+def _runtime_tool_response(request_id: Any, tool_name: str, arguments: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    if bool(arguments.get("include_debug", False)):
+        return _tool_response(request_id, data)
+    return _tool_response(request_id, _compact_runtime_payload(tool_name, data))
+
+
+def _compact_runtime_payload(tool_name: str, data: dict[str, Any]) -> dict[str, Any]:
+    if tool_name == "get_preference_decision":
+        return _compact_decision_payload(data, tool=tool_name)
+    if tool_name == "prewarm_preferences":
+        return _compact_prewarm_payload(data, tool=tool_name)
+    if tool_name in {"hook_session_start", "hook_user_message"}:
+        return _compact_preference_hook_payload(data, tool=tool_name)
+    if tool_name == "hook_turn_complete":
+        return _compact_turn_payload(data, tool=tool_name)
+    if tool_name == "hook_action_executed":
+        return _compact_action_payload(data, tool=tool_name)
+    if tool_name == "hook_session_end":
+        return _compact_session_end_payload(data, tool=tool_name)
+    return data
+
+
+def _compact_decision_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
+    payload = {
+        "ok": True,
+        "tool": tool,
+        "decision": str(data.get("decision") or ""),
+        "agent_instruction": str(data.get("agent_instruction") or ""),
+        "matched_count": _matched_count(data.get("matched_preferences")),
+        "matched_preferences": _compact_matches(data.get("matched_preferences")),
+        "escalate": bool(data.get("escalate", False)),
+        "reason": str(data.get("reason") or ""),
+        "checked_at": str(data.get("checked_at") or ""),
+        "debug_ref": "Re-run with include_debug=true for full Datailor metadata.",
+    }
+    _add_conflict(payload, data)
+    _add_auto_discovery(payload, data)
+    return _drop_empty(payload)
+
+
+def _compact_prewarm_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
+    payload = {
+        "ok": True,
+        "tool": tool,
+        "decision": str(data.get("decision") or ""),
+        "agent_instruction": str(data.get("agent_instruction") or ""),
+        "matched_count": _matched_count(data.get("matched_preferences")),
+        "matched_preferences": _compact_matches(data.get("matched_preferences")),
+        "session_cache_file": str(data.get("session_cache_file") or ""),
+        "fallback_file": str(data.get("fallback_file") or ""),
+        "checked_at": str(data.get("checked_at") or ""),
+        "debug_ref": "Re-run with include_debug=true for full Datailor metadata.",
+    }
+    _add_auto_discovery(payload, data)
+    return _drop_empty(payload)
+
+
+def _compact_preference_hook_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
+    decision = data.get("decision") if isinstance(data.get("decision"), dict) else {}
+    prewarm = data.get("prewarm") if isinstance(data.get("prewarm"), dict) else {}
+    instruction = str(decision.get("agent_instruction") or "")
+    payload = {
+        "ok": bool(data.get("ok", True)),
+        "tool": tool,
+        "hook": str(data.get("hook") or ""),
+        "agent": str(data.get("agent") or ""),
+        "session_id": str(data.get("session_id") or ""),
+        "preference_signal": data.get("preference_signal"),
+        "decision": str(decision.get("decision") or ""),
+        "agent_instruction": instruction,
+        "matched_count": _matched_count(decision.get("matched_preferences")),
+        "matched_preferences": _compact_matches(decision.get("matched_preferences")),
+        "escalate": bool(decision.get("escalate", False)),
+        "reason": str(decision.get("reason") or ""),
+        "session_cache_file": str(prewarm.get("session_cache_file") or ""),
+        "fallback_file": str(prewarm.get("fallback_file") or ""),
+        "debug_ref": "Re-run with include_debug=true for full Datailor metadata.",
+    }
+    _add_conflict(payload, decision)
+    _add_auto_discovery(payload, data)
+    return _drop_empty(payload)
+
+
+def _compact_turn_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
+    payload = {
+        "ok": bool(data.get("ok", True)),
+        "tool": tool,
+        "hook": str(data.get("hook") or ""),
+        "agent": str(data.get("agent") or ""),
+        "session_id": str(data.get("session_id") or ""),
+        "buffered": data.get("buffered"),
+        "preference_signal": data.get("preference_signal"),
+        "buffer_size": data.get("buffer_size"),
+        "max_turns": data.get("max_turns"),
+        "reason": str(data.get("reason") or ""),
+        "flush": _compact_flush(data.get("flush")),
+        "fitting": _compact_fitting(data.get("fitting")),
+        "debug_ref": "Re-run with include_debug=true for full Datailor metadata.",
+    }
+    return _drop_empty(payload)
+
+
+def _compact_action_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
+    payload = {
+        "ok": bool(data.get("ok", True)),
+        "tool": tool,
+        "hook": str(data.get("hook") or ""),
+        "agent": str(data.get("agent") or ""),
+        "session_id": str(data.get("session_id") or ""),
+        "captured": data.get("captured"),
+        "reason": str(data.get("reason") or ""),
+        "capture": _compact_capture(data.get("capture")),
+        "debug_ref": "Re-run with include_debug=true for full Datailor metadata.",
+    }
+    return _drop_empty(payload)
+
+
+def _compact_session_end_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
+    payload = {
+        "ok": bool(data.get("ok", True)),
+        "tool": tool,
+        "hook": str(data.get("hook") or ""),
+        "agent": str(data.get("agent") or ""),
+        "session_id": str(data.get("session_id") or ""),
+        "buffer_flush": _compact_flush(data.get("buffer_flush")),
+        "full_capture": _compact_capture(data.get("full_capture")),
+        "sync": _compact_sync(data.get("sync")),
+        "fitting": _compact_fitting(data.get("fitting")),
+        "debug_ref": "Re-run with include_debug=true for full Datailor metadata.",
+    }
+    return _drop_empty(payload)
+
+
+def _compact_matches(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    matches: list[dict[str, str]] = []
+    for item in value[:5]:
+        if not isinstance(item, dict):
+            continue
+        matches.append(
+            _drop_empty(
+                {
+                    "id": str(item.get("id") or ""),
+                    "title": str(item.get("title") or ""),
+                    "instruction": str(item.get("instruction") or ""),
+                }
+            )
+        )
+    return matches
+
+
+def _matched_count(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _add_conflict(payload: dict[str, Any], decision: dict[str, Any]) -> None:
+    conflict = decision.get("conflict")
+    if not isinstance(conflict, dict):
+        return
+    options = conflict.get("options")
+    if not isinstance(options, list):
+        return
+    payload["conflict_options"] = [
+        _drop_empty(
+            {
+                "id": str(item.get("id") or ""),
+                "title": str(item.get("title") or ""),
+                "instruction": str(item.get("instruction") or ""),
+            }
+        )
+        for item in options
+        if isinstance(item, dict)
+    ]
+
+
+def _add_auto_discovery(payload: dict[str, Any], data: dict[str, Any]) -> None:
+    auto = data.get("auto_discovery")
+    if not isinstance(auto, dict):
+        return
+    payload["auto_discovery"] = _drop_empty(
+        {
+            "attempted": auto.get("attempted"),
+            "dry_run": auto.get("dry_run"),
+            "scanned_sources_count": _collection_count(auto.get("scanned_sources")),
+            "changed_files_count": _collection_count(auto.get("changed_files")),
+            "total_files_seen": auto.get("total_files_seen"),
+        }
+    )
+
+
+def _compact_capture(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return _drop_empty(
+        {
+            "source": str(value.get("source") or ""),
+            "sessions_seen": value.get("sessions_seen"),
+            "candidates_seen": value.get("candidates_seen"),
+            "added_count": _list_count(value.get("added")),
+            "merged_count": _list_count(value.get("merged")),
+            "replaced_count": _list_count(value.get("replaced")),
+            "conflicts_count": _list_count(value.get("conflicts")),
+            "dry_run": value.get("dry_run"),
+            "filtered_candidates": value.get("filtered_candidates"),
+            "cap": _compact_cap(value.get("cap")),
+        }
+    )
+
+
+def _compact_flush(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return _drop_empty(
+        {
+            "flushed": value.get("flushed"),
+            "turns": value.get("turns"),
+            "reason": str(value.get("reason") or ""),
+            "capture": _compact_capture(value.get("capture")),
+        }
+    )
+
+
+def _compact_sync(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return _drop_empty(
+        {
+            "rules_count": value.get("rules_count"),
+            "fallback_count": value.get("fallback_count"),
+            "target_files_count": _list_count(value.get("target_files")),
+        }
+    )
+
+
+def _compact_cap(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return _drop_empty(
+        {
+            "limit": value.get("limit"),
+            "before_count": value.get("before_count"),
+            "after_count": value.get("after_count"),
+            "merged_count": _list_count(value.get("merged")),
+            "review_required": value.get("review_required"),
+            "review_candidates_count": _list_count(value.get("review_candidates")),
+            "overflow_record_count": value.get("overflow_record_count"),
+            "added_removed_by_cap_count": _list_count(value.get("added_removed_by_cap")),
+            "artifact_file": str(value.get("artifact_file") or ""),
+        }
+    )
+
+
+def _compact_fitting(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    decision = value.get("decision")
+    reason = decision.get("reason") if isinstance(decision, dict) else value.get("reason")
+    return _drop_empty(
+        {
+            "ok": value.get("ok"),
+            "triggered": value.get("triggered"),
+            "job_id": str(value.get("job_id") or ""),
+            "reason": str(reason or ""),
+        }
+    )
+
+
+def _list_count(value: Any) -> int | None:
+    return len(value) if isinstance(value, list) else None
+
+
+def _collection_count(value: Any) -> int:
+    return len(value) if isinstance(value, (dict, list, tuple, set)) else 0
+
+
+def _drop_empty(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: item
+        for key, item in value.items()
+        if key == "matched_preferences" or item not in ("", None, [], {})
+    }
 
 
 def _maybe_auto_cold_start(engine: PreferenceEngine, agent: str) -> dict[str, Any] | None:
@@ -540,6 +824,7 @@ TOOLS = [
                 "question": {"type": "string", "description": "Compatibility field: the question the agent is about to ask the user"},
                 "agent": {"type": "string", "description": "Caller agent name, such as codex/openclaw"},
                 "context": {"type": "object", "description": "Context such as project, language, risk, and files"},
+                "include_debug": {"type": "boolean", "description": "Return full internal metadata instead of the compact visible payload"},
             },
         },
     },
@@ -578,6 +863,7 @@ TOOLS = [
                 "agent": {"type": "string", "description": "Caller agent name"},
                 "context": {"type": "object", "description": "Context such as project, path, risk, and task type"},
                 "output_dir": {"type": "string", "description": "Optional session cache output directory"},
+                "include_debug": {"type": "boolean", "description": "Return full internal metadata instead of the compact visible payload"},
             },
         },
     },
@@ -592,6 +878,7 @@ TOOLS = [
                 "task": {"type": "string", "description": "Task or initialization note for this session"},
                 "context": {"type": "object", "description": "Context such as project, path, risk, and task type"},
                 "output_dir": {"type": "string", "description": "Optional session cache output directory"},
+                "include_debug": {"type": "boolean", "description": "Return full internal metadata instead of the compact visible payload"},
             },
         },
     },
@@ -606,6 +893,7 @@ TOOLS = [
                 "agent": {"type": "string", "description": "Caller agent name"},
                 "session_id": {"type": "string", "description": "Current session id"},
                 "context": {"type": "object", "description": "Current context"},
+                "include_debug": {"type": "boolean", "description": "Return full internal metadata instead of the compact visible payload"},
             },
         },
     },
@@ -622,6 +910,7 @@ TOOLS = [
                 "session_id": {"type": "string", "description": "Current session id"},
                 "context": {"type": "object", "description": "Current context"},
                 "dry_run": {"type": "boolean", "description": "Preview only; do not write the preference store"},
+                "include_debug": {"type": "boolean", "description": "Return full internal metadata instead of the compact visible payload"},
             },
         },
     },
@@ -638,6 +927,7 @@ TOOLS = [
                 "session_id": {"type": "string", "description": "Current session id"},
                 "metadata": {"type": "object", "description": "Action metadata"},
                 "dry_run": {"type": "boolean", "description": "Preview only; do not write the preference store"},
+                "include_debug": {"type": "boolean", "description": "Return full internal metadata instead of the compact visible payload"},
             },
         },
     },
@@ -655,6 +945,7 @@ TOOLS = [
                     "description": "Optional full session message list; each item includes role/content",
                 },
                 "dry_run": {"type": "boolean", "description": "Preview only; do not write the preference store"},
+                "include_debug": {"type": "boolean", "description": "Return full internal metadata instead of the compact visible payload"},
             },
         },
     },

@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ..backends import semantic_similarity
+from ..capacity import count_cap_records, enforce_preference_cap, preference_limit
 from ..executive_summary import read_executive_summary
 from ..feedback import feedback_report, record_feedback
 from ..fitting import apply_fitting_plan, latest_fitting, reject_fitting_plan
@@ -21,7 +22,7 @@ from ..fitting_trigger import default_mode_settings, mark_fitting_reviewed, norm
 from ..injection import sync_injection_artifacts
 from ..injection_log import default_injection_log, injection_log_summary, read_injection_log
 from ..live_confidence import live_confidence
-from ..models import PreferenceRecord, now_iso
+from ..models import Evidence, PreferenceRecord, now_iso
 from ..paths import default_feedback_log as default_feedback_log_path
 from ..paths import default_store_path as default_preference_store_path
 from ..paths import default_ui_dir as default_user_ui_dir
@@ -108,6 +109,7 @@ def build_manifesto(
     active = [item for item in preferences if item["status"] == "active"]
     pending = [item for item in preferences if item["status"] != "active"]
     attention = [item for item in preferences if item["attention"]]
+    cap = enforce_preference_cap([PreferenceRecord.from_dict(record.to_dict()) for record in records], mode="review-first")
     conflict_groups = _build_conflict_groups(records, preferences)
     mode = _effective_mode(settings, events)
     fitting_state = settings.get("fitting") if isinstance(settings.get("fitting"), dict) else {}
@@ -131,6 +133,11 @@ def build_manifesto(
             "attention": len(attention),
             "feedback_total": int(feedback.get("total", 0)),
             "last_updated": _latest_update(preferences),
+            "preference_count": count_cap_records(records),
+            "preference_limit": preference_limit(),
+            "over_limit": count_cap_records(records) > preference_limit(),
+            "cap_review_required": cap.review_required,
+            "cap_review_candidates": len(cap.review_candidates),
         },
         "executive_summary": executive_summary.to_dict(),
         "preferences": preferences,
@@ -283,6 +290,9 @@ def _make_handler(config: UiConfig) -> type[BaseHTTPRequestHandler]:
             if path == "/static/app.js":
                 self._serve_static("app.js", "application/javascript; charset=utf-8")
                 return
+            if path == "/static/brand-logo.png":
+                self._serve_static("brand-logo.png", "image/png")
+                return
             if path in {"/favicon.png", "/static/favicon.png"}:
                 self._serve_static("favicon.png", "image/png")
                 return
@@ -425,7 +435,7 @@ def _record_view(record: PreferenceRecord, feedback_by_preference: dict[str, dic
     statement = _statement(record)
     feedback = feedback_by_preference.get(record.id) or feedback_by_preference.get(statement) or {}
     recommendation = str(feedback.get("recommendation") or "observe")
-    source_count = len({item.source for item in record.evidence if item.source})
+    session_count = len({_evidence_session_key(item) for item in record.evidence if _evidence_session_key(item)})
     occurrences = max(1, len(record.evidence)) + int(feedback.get("usage", 0)) + int(feedback.get("confirmation", 0))
     live = live_confidence(record, relevance_score=0.26)
     attention = (
@@ -454,7 +464,7 @@ def _record_view(record: PreferenceRecord, feedback_by_preference: dict[str, dic
         },
         "live_confidence_reasons": live.reasons,
         "frequency": occurrences,
-        "sessions": source_count,
+        "sessions": session_count,
         "triggers": record.triggers,
         "exceptions": record.exceptions,
         "conflict_notes": record.conflict_notes,
@@ -464,6 +474,10 @@ def _record_view(record: PreferenceRecord, feedback_by_preference: dict[str, dic
         "feedback": feedback,
         "attention": attention,
     }
+
+
+def _evidence_session_key(item: Evidence) -> str:
+    return str(getattr(item, "session_id", "") or getattr(item, "source", "") or "").strip()
 
 
 def _latest_fitting_view() -> dict[str, Any] | None:

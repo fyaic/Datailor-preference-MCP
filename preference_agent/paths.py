@@ -11,6 +11,8 @@ from typing import Any
 
 PACKAGE_NAME = "datailor-preference-mcp"
 PRODUCT_DIR_NAME = "Datailor"
+DEFAULT_STORE_FILENAME = "personal-preferences.md"
+LEGACY_STORE_FILENAME = "个人偏好.md"
 
 
 def default_data_dir() -> Path:
@@ -29,7 +31,27 @@ def default_data_dir() -> Path:
 
 def default_store_path() -> Path:
     configured = os.getenv("PREFERENCE_STORE_PATH")
-    return Path(configured) if configured else default_data_dir() / "personal-preferences.md"
+    if configured:
+        return Path(configured)
+    data_dir = default_data_dir()
+    default_store = data_dir / DEFAULT_STORE_FILENAME
+    legacy_store = data_dir / LEGACY_STORE_FILENAME
+    if legacy_store.exists() and not _store_has_preferences(default_store) and _store_has_preferences(legacy_store):
+        return legacy_store
+    return default_store
+
+
+def _store_has_preferences(path: Path) -> bool:
+    if not path.exists() or not path.is_file():
+        return False
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    lowered = text.casefold()
+    if "- " in text:
+        return True
+    return "no active preferences yet" not in lowered and "no observed preferences yet" not in lowered
 
 
 def default_checkpoint_dir() -> Path:

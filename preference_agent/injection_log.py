@@ -43,7 +43,7 @@ def log_injection_event(
         "decision": str(decision.get("decision") or ""),
         "matched_count": len(matched) if isinstance(matched, list) else 0,
         "matched_preferences": _matched_view(matched),
-        "agent_instruction": _clean(instruction, limit=1200),
+        "agent_instruction": _clean(instruction, limit=0),
         "injected": injected,
         "reason": _clean(reason or str(decision.get("reason") or "")),
         "escalate": bool(decision.get("escalate", False)),
@@ -118,4 +118,6 @@ def _session_id(context: dict[str, Any]) -> str:
 
 def _clean(text: str, limit: int = 500) -> str:
     cleaned = redact_sensitive(" ".join(str(text or "").split()).strip())
+    if limit <= 0:
+        return cleaned
     return cleaned if len(cleaned) <= limit else cleaned[: max(0, limit - 3)] + "..."

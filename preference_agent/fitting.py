@@ -8,6 +8,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from .agent_discovery import auto_discover_sources
 from .backends import semantic_similarity
+from .capacity import count_cap_records, enforce_preference_cap, preference_limit, quality_rank_records, write_cap_review_artifact
 from .feedback import feedback_report
 from .live_confidence import live_confidence
 from .models import Evidence, PreferenceRecord
@@ -25,6 +26,7 @@ class FittingInput:
     source: str
     text: str
     role: str = "user"
+    session_id: str = ""
 
 
 def run_fitting(
@@ -206,6 +208,20 @@ def analyze_memory_rot(records: list[PreferenceRecord], feedback: dict[str, Any]
                     evidence=[_statement(record)],
                 )
             )
+    cap = preference_limit()
+    if count_cap_records(records) > cap:
+        overflow = quality_rank_records([record for record in records if str(record.status or "").casefold() not in {"archived", "rejected", "deleted"}])[cap:]
+        for record in overflow:
+            suggestions.append(
+                RotSuggestion(
+                    type="archive_candidate",
+                    target_ids=[record.id],
+                    risk="medium",
+                    reason=f"The canonical preference store exceeds the {cap}-record cap; this lower-value preference should be reviewed, merged, or archived.",
+                    proposed_action="mark_needs_review",
+                    evidence=[_statement(record)],
+                )
+            )
     return suggestions[:100]
 
 
@@ -285,6 +301,12 @@ def apply_fitting_plan(
         suggestion = RotSuggestion.from_dict(suggestion_data) if isinstance(suggestion_data, dict) else None
         if not suggestion:
             continue
+        if change.type == "merge":
+            merged = _merge_suggestion_targets(records, suggestion.target_ids)
+            if merged:
+                change.status = "applied"
+                applied.append({"change_id": change.change_id, "action": "merge", "target_id": merged})
+            continue
         for target_id in suggestion.target_ids:
             record = next((item for item in records if item.id == target_id), None)
             if not record:
@@ -296,11 +318,14 @@ def apply_fitting_plan(
                 record.status = "needs_review"
             elif change.type == "mark_needs_review":
                 record.status = "needs_review"
-            elif change.type == "merge":
-                record.status = "needs_review"
             record.touch()
             change.status = "applied"
             applied.append({"change_id": change.change_id, "action": change.type, "target_id": target_id})
+    cap_result = enforce_preference_cap(records, mode="review-first")
+    records = cap_result.records
+    cap_artifact = ""
+    if cap_result.review_required or cap_result.merged:
+        cap_artifact = write_cap_review_artifact(store.path, cap_result)
     if applied:
         store.save(records)
         _write_review_state(job_store, result, plan)
@@ -315,7 +340,25 @@ def apply_fitting_plan(
         "pending_change_ids": remaining,
         "readback_records": len(readback),
         "readback_ok": bool(readback or not records),
+        "cap": cap_result.to_dict(),
+        "cap_review_file": cap_artifact,
     }
+
+
+def _merge_suggestion_targets(records: list[PreferenceRecord], target_ids: list[str]) -> str:
+    targets = [record for record in records if record.id in set(target_ids)]
+    if len(targets) < 2:
+        return targets[0].id if targets else ""
+    keeper = quality_rank_records(targets)[0]
+    for record in targets:
+        if record.id == keeper.id:
+            continue
+        keeper.add_evidence_from(record)
+        keeper.conflict_notes = list(dict.fromkeys([*keeper.conflict_notes, *record.conflict_notes]))
+        record.status = "archived"
+        record.touch()
+    keeper.touch()
+    return keeper.id
 
 
 def reject_fitting_plan(job_id: str, fitting_dir: str | Path | None = None) -> dict[str, Any]:
@@ -437,7 +480,7 @@ def _collect_inputs(
                 files_seen.add(file_key)
             for message in session.messages:
                 if message.role == "user":
-                    inputs.append(FittingInput(source=session.source, text=message.content, role=message.role))
+                    inputs.append(FittingInput(source=session.source, session_id=session.session_id, text=message.content, role=message.role))
         if stop:
             break
     for record in records:
@@ -601,6 +644,7 @@ def _insight_from_text(kind: str, text: str, item: FittingInput) -> InsightRecor
         evidence=[
             Evidence(
                 source=item.source,
+                session_id=item.session_id,
                 quote=_short(text, 500),
                 role=item.role,
                 source_type="user_explicit" if item.role == "user" else "context_inferred",

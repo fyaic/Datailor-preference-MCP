@@ -251,6 +251,7 @@ class PreferenceHookManager:
             evidence=[
                 Evidence(
                     source=f"behavior:{agent}:{session_id}:{action}",
+                    session_id=session_id,
                     quote=result or json.dumps(metadata or {}, ensure_ascii=False),
                     role="system",
                     source_type="action_signal",

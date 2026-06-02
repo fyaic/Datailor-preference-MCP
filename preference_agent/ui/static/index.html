@@ -4,28 +4,29 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Personal Preference Manifesto</title>
-    <link rel="icon" type="image/png" href="/static/favicon.png">
+    <link rel="icon" type="image/png" href="/static/favicon.png?v=datailor-icon-2">
     <link rel="stylesheet" href="/static/style.css">
   </head>
   <body>
     <main class="page">
+      <nav class="topbar" aria-label="Panel navigation">
+        <a href="/" class="brand" aria-label="Datailor Manifesto home">
+          <img src="/static/brand-logo.png" alt="Datailor">
+        </a>
+        <a href="https://datailor.space/" target="_blank" rel="noopener" class="brand-link">datailor.space →</a>
+        <span class="topbar-note" data-i18n="topbarNote">Local preference layer</span>
+      </nav>
       <header class="masthead">
-        <p class="section-mark">S1</p>
+        <p class="section-mark" data-i18n="sectionMark">Manifesto UI</p>
         <div class="masthead-row">
-          <h1 data-i18n="appTitle">Personal Preference Manifesto</h1>
+          <div>
+            <h1 data-i18n="appTitle">Personal Preference Manifesto</h1>
+            <p class="masthead-copy" data-i18n="appSubtitle">Review, correct, and trace the defaults your AI agents use.</p>
+          </div>
           <div class="language-switcher" aria-label="Language">
             <button data-language="en" class="language-button active">EN</button>
             <button data-language="zh" class="language-button">&#20013;</button>
           </div>
-        </div>
-        <div class="toolbar" aria-label="Sections">
-          <button data-tab="all" data-i18n="tabs.all" class="tab active">All</button>
-          <button data-tab="pending" data-i18n="tabs.pending" class="tab">Pending</button>
-          <button data-tab="conflicts" data-i18n="tabs.conflicts" class="tab">Conflicts</button>
-          <button data-tab="evolution" data-i18n="tabs.evolution" class="tab">Evolution</button>
-          <button data-tab="fitting" data-i18n="tabs.fitting" class="tab">Fitting</button>
-          <button data-tab="injection" data-i18n="tabs.injection" class="tab">Injection</button>
-          <button data-tab="settings" data-i18n="tabs.settings" class="tab">Settings</button>
         </div>
       </header>
 
@@ -36,10 +37,22 @@
           <div><dt data-i18n="summary.active">Active preferences</dt><dd id="active-count">0</dd></div>
           <div><dt data-i18n="summary.pending">Pending confirmation</dt><dd id="pending-count">0</dd></div>
           <div><dt data-i18n="summary.conflicts">Conflicts awaiting resolution</dt><dd id="conflict-count">0</dd></div>
+          <div><dt data-i18n="summary.capacity">Preference cap</dt><dd id="capacity-count">0/50</dd></div>
+          <div><dt data-i18n="summary.capReview">Cap review</dt><dd id="cap-status">OK</dd></div>
           <div><dt data-i18n="summary.mode">Effective mode</dt><dd id="mode-label">auto</dd></div>
         </dl>
         <p class="remark" id="store-path"></p>
       </section>
+
+      <div class="toolbar" aria-label="Sections">
+        <button data-tab="all" data-i18n="tabs.all" class="tab active">All</button>
+        <button data-tab="pending" data-i18n="tabs.pending" class="tab">Pending</button>
+        <button data-tab="conflicts" data-i18n="tabs.conflicts" class="tab">Conflicts</button>
+        <button data-tab="evolution" data-i18n="tabs.evolution" class="tab">Evolution</button>
+        <button data-tab="fitting" data-i18n="tabs.fitting" class="tab">Fitting</button>
+        <button data-tab="injection" data-i18n="tabs.injection" class="tab">Injection</button>
+        <button data-tab="settings" data-i18n="tabs.settings" class="tab">Settings</button>
+      </div>
 
       <section id="main-section">
         <div class="section-heading">

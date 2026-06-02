@@ -24,6 +24,7 @@ class Evidence:
     source: str
     quote: str
     role: str = "user"
+    session_id: str = ""
     source_type: str = "user_explicit"
     observed_at: str = field(default_factory=now_iso)
 
@@ -35,6 +36,7 @@ class Evidence:
             source=source,
             quote=str(data.get("quote", "")),
             role=role,
+            session_id=str(data.get("session_id") or data.get("session") or ""),
             source_type=str(data.get("source_type") or infer_evidence_source_type(source, role)),
             observed_at=str(data.get("observed_at") or now_iso()),
         )

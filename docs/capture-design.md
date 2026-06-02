@@ -25,6 +25,7 @@ read files
   -> normalize into role/content messages
   -> model extracts preference candidates
   -> merge with empty store
+  -> enforce the preference capacity policy
   -> write human-readable Markdown preferences
 ```
 
@@ -45,6 +46,17 @@ Incremental capture is not append-only. It performs four merge actions:
 | merge | Same intent and consistent | Append evidence and strengthen confidence |
 | replace | User explicitly said "from now on", "change to", or similar | Update the primary preference |
 | conflict | Same intent but uncertain change | Mark `needs_review` and keep conflict evidence |
+
+## Capacity Governance
+
+The canonical Markdown store counts active, pending, draft, and reviewable preferences toward the capacity limit. Archived, rejected, and deleted records do not count. The default limit is 50 and can be changed with `PREFERENCE_STORE_MAX_RECORDS`.
+
+Capacity enforcement is quality-preserving:
+
+- Merge exact or near-exact duplicates first, preserving evidence on the surviving record.
+- Rank remaining records by quality, status, confidence, evidence depth, conflict notes, and genericness.
+- If the ranked set still exceeds the limit, keep the best records in `personal-preferences.md` and write overflow candidates to `*.cap-review.jsonl`.
+- Do not silently delete overflow candidates; they must be reviewed, merged, generalized, or archived through Fitting or a human action.
 
 ## Kimi Raw Data Capture Recommendation
 

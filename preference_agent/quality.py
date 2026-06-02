@@ -19,6 +19,8 @@ STABLE_SIGNAL_PATTERNS = (
     re.compile(r"(proactively).{0,24}(ask|document)", re.I),
     re.compile(r"(do not|avoid|forbid|never).{0,24}(every time|always|ask me|verbose|long answer|push|commit|overwrite|break)", re.I),
     re.compile(r"(must|need|should).{0,32}(read back|test|verify|review|document|bullets|local|headless|encoding)", re.I),
+    re.compile(r"(从现在|以后|默认|每次|总是|一直|记住|必须|应该|优先|不要|别).{0,32}(回复|输出|测试|验证|验收|评审|回读|沉淀|文档|确认|询问|提交|推送|覆盖|外部系统|中文|编码|偏好)"),
+    re.compile(r"(我希望|我偏好|我认为|我需要|我的习惯|偏好是).{0,40}(回复|输出|测试|验证|验收|评审|回读|沉淀|文档|确认|询问|简洁|分点|上限|偏好)"),
 )
 
 ONE_OFF_PATTERNS = (
@@ -28,8 +30,11 @@ ONE_OFF_PATTERNS = (
     re.compile(r"[A-Za-z]:\\"),
     re.compile(r"\b(github\.com|linear\.app)\b", re.I),
     re.compile(r"(today|yesterday|just now|right now|current|this time|temporary|for now|past week)", re.I),
+    re.compile(r"(今天|昨天|刚才|现在这个|当前|本次|这次|临时|暂时|上周|这周)"),
     re.compile(r"(help me|please).{0,40}(look|check|edit|fix|record|create|install|pull|push|upload|restart|test|verify|inspect)", re.I),
+    re.compile(r"(帮我|请).{0,40}(看|检查|编辑|修复|记录|创建|安装|拉取|推送|上传|重启|测试|验证|遍历)"),
     re.compile(r"(this repo|this file|this issue|this project|this PRD|this page|this screenshot|this code)", re.I),
+    re.compile(r"(这个仓库|这个文件|这个 issue|这个项目|这个页面|这张截图|这段代码)"),
     re.compile(r"(create|batch edit|push up|pull down|upload|restart|delete|move|paste a copy)", re.I),
     re.compile(r"(\bquestion\b|inspect the following code|not loading|preview but|merge into one folder)", re.I),
     re.compile(r"(\.plugin|wechat ide|obsidian local directory|same code repository)", re.I),
@@ -86,6 +91,35 @@ GUIDANCE_TERMS = (
     "voice",
     "answer",
     "answers",
+    "回复",
+    "输出",
+    "解释",
+    "结论",
+    "简洁",
+    "分点",
+    "要点",
+    "易扫读",
+    "文档",
+    "沉淀",
+    "测试",
+    "验证",
+    "验收",
+    "评审",
+    "回读",
+    "编码",
+    "外部系统",
+    "中文",
+    "本地",
+    "提交",
+    "推送",
+    "主动",
+    "询问",
+    "确认",
+    "工具",
+    "模型",
+    "覆盖",
+    "交互",
+    "界面",
 )
 
 
@@ -114,11 +148,11 @@ def should_recall_user_text(text: str) -> bool:
     stable = has_stable_signal(cleaned)
     guidance = has_guidance_terms(cleaned)
     one_off = looks_like_one_off_task(cleaned)
-    if one_off and not re.search(r"(from now on|default|every time|always|i said before|remember)", cleaned, re.I):
+    if one_off and not re.search(r"(from now on|default|every time|always|i said before|remember|从现在|以后|默认|每次|总是|记住)", cleaned, re.I):
         return False
     if stable and guidance:
         return True
-    if re.search(r"(i said before|remember)", cleaned, re.I):
+    if re.search(r"(i said before|remember|我之前说过|记住)", cleaned, re.I):
         return guidance
     return False
 

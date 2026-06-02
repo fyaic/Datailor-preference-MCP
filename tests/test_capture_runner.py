@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from preference_agent.backends import HeuristicBackend
-from preference_agent.capture_runner import CaptureConfig, CaptureRunner
+from preference_agent.capture_runner import CaptureConfig, CaptureRunner, _extract_messages, _message_from_object
 
 
 class CaptureRunnerTests(unittest.TestCase):
@@ -104,6 +104,81 @@ class CaptureRunnerTests(unittest.TestCase):
             self.assertEqual(result.summary_file, "")
             checkpoint = json.loads(Path(result.checkpoint_file).read_text(encoding="utf-8"))
             self.assertTrue(checkpoint["completed"])
+
+    def test_wrapper_with_content_and_messages_prefers_inner_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "history.jsonl"
+            source.write_text(
+                json.dumps(
+                    {
+                        "content": "summary wrapper text",
+                        "messages": [
+                            {"role": "assistant", "content": "Should I organize this into documentation?"},
+                            {"role": "user", "content": "Yes. For solution design and complex breakdowns, proactively ask whether to save the conclusions."},
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            config = CaptureConfig(
+                project_root=root,
+                candidate_dir=root / "data" / "candidates",
+                checkpoint_dir=root / "data" / "checkpoints",
+                store_path=root / "data" / "personal-preferences.md",
+                mode="recall-only",
+                max_minutes=1,
+            )
+            result = CaptureRunner(config).run(source)
+            # 应该提取内部 messages，而不是只返回 summary wrapper text
+            self.assertGreaterEqual(result.user_messages_seen, 1)
+            pref_text = Path(result.store_file).read_text(encoding="utf-8")
+            self.assertIn("ask whether to save", pref_text.casefold())
+            self.assertNotIn("summary wrapper text", pref_text.casefold())
+
+    def test_type_kind_source_are_not_defaulted_to_user(self) -> None:
+        # 验证 type/kind/source 被正确提取为 role，不会默认当作 user
+        assistant_by_type = _message_from_object({"type": "assistant", "content": "I will do that."})
+        self.assertIsNotNone(assistant_by_type)
+        self.assertEqual(assistant_by_type["role"], "assistant")
+
+        tool_by_kind = _message_from_object({"kind": "tool", "content": "Tool output here."})
+        self.assertIsNotNone(tool_by_kind)
+        self.assertEqual(tool_by_kind["role"], "tool")
+
+        system_by_source = _message_from_object({"source": "system", "content": "System message."})
+        self.assertIsNotNone(system_by_source)
+        self.assertEqual(system_by_source["role"], "system")
+
+        # 纯 content-only（Kimi JSONL）仍应正确识别为 user
+        user_content_only = _message_from_object({"content": "From now on, give me the conclusion first."})
+        self.assertIsNotNone(user_content_only)
+        self.assertEqual(user_content_only["role"], "user")
+
+        # type/kind/source 为 user 时应正确识别
+        user_by_type = _message_from_object({"type": "user", "content": "Hello."})
+        self.assertIsNotNone(user_by_type)
+        self.assertEqual(user_by_type["role"], "user")
+
+        # 含 messages 的 wrapper 应优先提取内部消息
+        wrapper = {
+            "content": "summary wrapper text",
+            "messages": [
+                {"role": "user", "content": "From now on, use tabs."},
+            ],
+        }
+        extracted = _extract_messages(wrapper)
+        self.assertEqual(len(extracted), 1)
+        self.assertEqual(extracted[0]["role"], "user")
+        self.assertEqual(extracted[0]["content"], "From now on, use tabs.")
+
+        # 有 structural hint 但 role 无法识别时，不应默认 user（返回 None）
+        unknown_type = _message_from_object({"type": None, "content": "Some text."})
+        self.assertIsNone(unknown_type)
+
+        empty_source = _message_from_object({"source": "", "content": "Some text."})
+        self.assertIsNone(empty_source)
 
     def test_recall_extract_writes_extracted_records_without_api(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

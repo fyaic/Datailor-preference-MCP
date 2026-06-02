@@ -7,6 +7,9 @@ const state = {
 const i18n = {
   en: {
     appTitle: "Personal Preference Manifesto",
+    appSubtitle: "Review, correct, and trace the defaults your AI agents use.",
+    topbarNote: "Local preference layer",
+    sectionMark: "Manifesto UI",
     summaryTitle: "1.1 Executive Summary",
     search: "Search",
     source: "Source",
@@ -32,6 +35,10 @@ const i18n = {
       active: "Active preferences",
       pending: "Pending confirmation",
       conflicts: "Conflicts awaiting resolution",
+      capacity: "Preference cap",
+      capReview: "Cap review",
+      capReviewOk: "OK",
+      capReviewNeeded: "Review",
       mode: "Effective mode"
     },
     empty: {
@@ -48,14 +55,14 @@ const i18n = {
       frequency: "Freq.",
       sessions: "Sessions",
       confidence: "Conf.",
-      liveConfidence: "Live",
+      liveConfidence: "Tendency",
       status: "Status"
     },
     detail: {
       statement: "Statement",
       theorem: "Theorem.",
       definition: "Definition.",
-      liveConfidence: "Live confidence.",
+      liveConfidence: "Apply tendency.",
       factors: "Factors.",
       evidence: "Evidence.",
       noEvidence: "No stored evidence in the Markdown view.",
@@ -64,6 +71,19 @@ const i18n = {
       correct: "Correct",
       correctionPrompt: "Correction",
       actionFailed: "The feedback was recorded, but the preference store was not updated."
+    },
+    tooltip: {
+      frequency: "How often this preference appears in captured evidence, confirmations, or usage signals.",
+      frequencyValue: "Estimated evidence count for this preference. Higher values usually mean the preference has appeared more often.",
+      sessions: "How many distinct sessions or sources contributed evidence for this preference.",
+      sessionsValue: "Number of separate sessions or sources behind this preference.",
+      confidence: "Stored confidence in the preference itself.",
+      confidenceValue: "Stored confidence saved with this preference. It describes long-term trust in the preference itself, not whether it matches a running agent task right now.",
+      liveConfidence: "General tendency to apply this preference in the current list view.",
+      liveValue: "General injection estimate for this preference list. This value is not tied to any currently running terminal; use Injection Log to see each agent session and task match.",
+      liveDetail: "This breakdown uses stored confidence, evidence, recency, consistency, and a general relevance estimate for the list view. Per-task matches appear in Injection Log.",
+      status: "Review state of the preference in the local store.",
+      statusValue: "Shows whether the preference is active, pending review, rejected, or otherwise waiting for a decision."
     },
     conflict: {
       similarity: "Similarity",
@@ -111,114 +131,202 @@ const i18n = {
       language: "Language",
       english: "English",
       chinese: "Chinese"
+    },
+    fitting: {
+      defaultTitle: "Fitting",
+      acceptSelected: "Accept Selected",
+      acceptAll: "Accept All",
+      rejectAll: "Reject All",
+      pendingNotice: "changes pending review. Nothing has been written yet.",
+      noInstructions: "No instructions were provided.",
+      insights: "Insights",
+      rot: "Rot",
+      conflicts: "Conflicts",
+      ignored: "Ignored",
+      proposedChanges: "Proposed Changes",
+      report: "Report",
+      next: "Next",
+      reportUnavailable: "The report file is not available from the UI.",
+      applyFailed: "Fitting apply failed."
+    },
+    status: {
+      active: "Active",
+      pending: "Pending",
+      pending_review: "Pending review",
+      needs_review: "Needs review",
+      rejected: "Rejected",
+      archived: "Archived"
+    },
+    confidence: {
+      high: "high",
+      medium: "medium",
+      low: "low"
+    },
+    mode: {
+      auto: "auto",
+      curate: "curate"
     }
   },
   zh: {
-    appTitle: "Personal Preference Manifesto",
-    summaryTitle: "1.1 Executive Summary",
-    search: "Search",
-    source: "Source",
+    appTitle: "个人偏好清单",
+    appSubtitle: "查看、修正并追踪 AI agent 正在使用的个人默认偏好。",
+    topbarNote: "本地偏好层",
+    sectionMark: "偏好面板",
+    summaryTitle: "1.1 摘要",
+    search: "搜索",
+    source: "来源",
     tabs: {
-      all: "All",
-      pending: "Pending",
-      conflicts: "Conflicts",
-      evolution: "Evolution",
+      all: "全部",
+      pending: "待确认",
+      conflicts: "冲突",
+      evolution: "演化",
       fitting: "Fitting",
-      injection: "Injection",
-      settings: "Settings"
+      injection: "注入日志",
+      settings: "设置"
     },
     titles: {
-      all: "1.2 High-Frequency Preferences",
-      pending: "1.3 Pending Confirmation",
-      conflicts: "1.4 Conflict Review",
-      evolution: "1.5 Evolution",
-      fitting: "1.6 Fitting Report",
-      injection: "1.7 Injection Log",
-      settings: "1.8 Settings"
+      all: "1.2 高频偏好",
+      pending: "1.3 待确认偏好",
+      conflicts: "1.4 冲突审查",
+      evolution: "1.5 偏好演化",
+      fitting: "1.6 Fitting 报告",
+      injection: "1.7 注入日志",
+      settings: "1.8 设置"
     },
     summary: {
-      active: "Active preferences",
-      pending: "Pending confirmation",
-      conflicts: "Conflicts awaiting resolution",
-      mode: "Effective mode"
+      active: "已启用偏好",
+      pending: "待确认偏好",
+      conflicts: "待处理冲突",
+      capacity: "偏好容量",
+      capReview: "容量审查",
+      capReviewOk: "正常",
+      capReviewNeeded: "需审查",
+      mode: "当前模式"
     },
     empty: {
-      section: "No records in this section.",
-      profile: "No stable personal profile has been generated yet. Capture preferences first, then this section will summarize what the system understands about the user.",
-      conflicts: "No A/B conflicts were detected. Pending items remain available in the Pending tab.",
-      feedback: "No feedback has been recorded.",
-      fitting: "No Fitting report has been generated yet.",
-      injection: "No injection events have been recorded yet. Start a session or call get_preference_decision to populate this timeline.",
-      missingSide: "Missing side."
+      section: "当前分区暂无记录。",
+      profile: "还没有生成稳定的个人画像。先捕获偏好后，这里会总结系统对用户默认偏好的理解。",
+      conflicts: "未检测到 A/B 冲突。待确认条目仍可在“待确认”标签页查看。",
+      feedback: "还没有记录反馈。",
+      fitting: "还没有生成 Fitting 报告。",
+      injection: "还没有注入事件。启动一次会话或调用 get_preference_decision 后，这里会显示时间线。",
+      missingSide: "缺少一侧内容。"
     },
     table: {
-      preference: "Preference",
-      frequency: "Freq.",
-      sessions: "Sessions",
-      confidence: "Conf.",
-      liveConfidence: "Live",
-      status: "Status"
+      preference: "偏好",
+      frequency: "频次",
+      sessions: "会话",
+      confidence: "可信度",
+      liveConfidence: "采用倾向",
+      status: "状态"
     },
     detail: {
-      statement: "Statement",
-      theorem: "Theorem.",
-      definition: "Definition.",
-      liveConfidence: "Live confidence.",
-      factors: "Factors.",
-      evidence: "Evidence.",
-      noEvidence: "No stored evidence in the Markdown view.",
-      confirm: "Confirm",
-      reject: "Reject",
-      correct: "Correct",
-      correctionPrompt: "Correction",
-      actionFailed: "The feedback was recorded, but the preference store was not updated."
+      statement: "偏好内容",
+      theorem: "冲突备注",
+      definition: "证据",
+      liveConfidence: "采用倾向",
+      factors: "因素",
+      evidence: "证据",
+      noEvidence: "Markdown 视图中没有保存证据。",
+      confirm: "确认",
+      reject: "拒绝",
+      correct: "修正",
+      correctionPrompt: "修正内容",
+      actionFailed: "反馈已记录，但偏好库没有更新。"
+    },
+    tooltip: {
+      frequency: "这条偏好在捕获证据、用户确认或使用信号中出现的频次。",
+      frequencyValue: "这条偏好的估算证据次数。数值越高，通常说明它出现得越频繁。",
+      sessions: "为这条偏好提供证据的不同会话或来源数量。",
+      sessionsValue: "支撑这条偏好的独立会话或来源数量。",
+      confidence: "偏好本身在本地库中保存的长期可信度。",
+      confidenceValue: "这条偏好保存时的长期可信度，说明偏好本身靠不靠谱；它不代表当前某个正在运行的 agent 任务是否匹配。",
+      liveConfidence: "列表页里这条偏好的通用采用倾向。",
+      liveValue: "偏好列表里的通用注入估计值。它不绑定你当前任何一个终端；要看每个 agent 会话和任务实际匹配了什么，请看 Injection Log。",
+      liveDetail: "这里按存储置信度、证据、更新时间、一致性和列表页通用相关性估算。具体任务的匹配结果在 Injection Log 里。",
+      status: "这条偏好在本地偏好库中的审查状态。",
+      statusValue: "显示这条偏好是已启用、待审查、已拒绝，还是处在其他待处理状态。"
     },
     conflict: {
-      similarity: "Similarity",
-      reviewRequired: "Review required.",
-      confidence: "Confidence",
-      scope: "Scope",
-      notSpecified: "Not specified"
+      similarity: "相似度",
+      reviewRequired: "需要审查。",
+      confidence: "可信度",
+      scope: "适用范围",
+      notSpecified: "未指定"
     },
     evolution: {
-      preference: "Preference",
-      use: "Use",
-      confirm: "Confirm",
-      correct: "Correct",
-      reject: "Reject",
-      recommendation: "Recommendation"
+      preference: "偏好",
+      use: "使用",
+      confirm: "确认",
+      correct: "修正",
+      reject: "拒绝",
+      recommendation: "建议"
     },
     injection: {
-      time: "Time",
-      hook: "Hook",
+      time: "时间",
+      hook: "钩子",
       agent: "Agent",
-      session: "Session",
-      decision: "Decision",
-      matched: "Matched",
-      instruction: "Instruction",
-      injected: "Injected",
-      reason: "Reason",
-      yes: "Yes",
-      no: "No"
+      session: "会话",
+      decision: "决策",
+      matched: "匹配偏好",
+      instruction: "注入指令",
+      injected: "已注入",
+      reason: "原因",
+      yes: "是",
+      no: "否"
     },
     settings: {
-      userMode: "User Mode",
-      configuredMode: "Configured mode",
-      effectiveMode: "Effective mode",
-      auto: "Auto",
-      curate: "Curate",
-      modeAutoTitle: "Auto Mode",
-      modeAutoDesc: "Fitting runs automatically and high-confidence preferences are applied without review. Workflows and rot suggestions are logged but not auto-written.",
-      modeAutoFor: "Best for: users who trust the system and prefer efficiency.",
-      modeCurateTitle: "Curate Mode (Recommended)",
-      modeCurateDesc: "Fitting runs automatically but only generates a plan. You must review and accept changes before they are written to your preference store.",
-      modeCurateFor: "Best for: cautious users. This is the default.",
-      theme: "Theme",
-      light: "Light",
-      dark: "Dark",
-      language: "Language",
-      english: "English",
-      chinese: "English"
+      userMode: "用户模式",
+      configuredMode: "配置模式",
+      effectiveMode: "生效模式",
+      auto: "自动",
+      curate: "审查",
+      modeAutoTitle: "自动模式",
+      modeAutoDesc: "Fitting 会自动运行，高可信偏好可不经审查直接应用。工作流和过期偏好建议会被记录，但不会自动写入。",
+      modeAutoFor: "适合：信任系统、优先效率的用户。",
+      modeCurateTitle: "审查模式（推荐）",
+      modeCurateDesc: "Fitting 会自动运行，但只生成应用计划。写入偏好库前需要你审查并接受变更。",
+      modeCurateFor: "适合：更谨慎的用户。这也是默认模式。",
+      theme: "主题",
+      light: "浅色",
+      dark: "深色",
+      language: "语言",
+      english: "英文",
+      chinese: "中文"
+    },
+    fitting: {
+      defaultTitle: "Fitting",
+      acceptSelected: "接受所选",
+      acceptAll: "全部接受",
+      rejectAll: "全部拒绝",
+      pendingNotice: "项变更正在等待审查。当前还没有写入偏好库。",
+      noInstructions: "没有提供说明。",
+      insights: "洞察",
+      rot: "过期建议",
+      conflicts: "冲突",
+      ignored: "已忽略",
+      proposedChanges: "拟议变更",
+      report: "报告",
+      next: "下一步",
+      reportUnavailable: "UI 暂时无法读取报告文件。",
+      applyFailed: "Fitting 应用失败。"
+    },
+    status: {
+      active: "已启用",
+      pending: "待处理",
+      pending_review: "待审查",
+      needs_review: "需审查",
+      rejected: "已拒绝",
+      archived: "已归档"
+    },
+    confidence: {
+      high: "高",
+      medium: "中",
+      low: "低"
+    },
+    mode: {
+      auto: "自动",
+      curate: "审查"
     }
   }
 };
@@ -263,7 +371,9 @@ function render() {
   document.getElementById("active-count").textContent = data.summary.active;
   document.getElementById("pending-count").textContent = data.summary.pending;
   document.getElementById("conflict-count").textContent = data.summary.conflicts;
-  document.getElementById("mode-label").textContent = data.mode;
+  document.getElementById("capacity-count").textContent = `${data.summary.preference_count}/${data.summary.preference_limit}`;
+  document.getElementById("cap-status").textContent = formatCapStatus(data.summary);
+  document.getElementById("mode-label").textContent = formatMode(data.mode);
   document.getElementById("store-path").textContent = `${t("source")}: ${data.store}`;
   document.getElementById("section-title").textContent = t(`titles.${state.tab}`) || t("titles.all");
   document.getElementById("executive-text").innerHTML = renderExecutiveSummary(data.executive_summary);
@@ -359,11 +469,11 @@ function renderTable(rows) {
           ${renderDetail(item)}
         </details>
       </td>
-      <td>${item.frequency}</td>
-      <td>${item.sessions}</td>
-      <td>${escapeHtml(item.confidence)}</td>
+      <td>${renderExplainedValue(item.frequency, t("tooltip.frequencyValue"))}</td>
+      <td>${renderExplainedValue(item.sessions, t("tooltip.sessionsValue"))}</td>
+      <td>${renderExplainedValue(formatConfidence(item.confidence), t("tooltip.confidenceValue"))}</td>
       <td>${renderLiveConfidence(item)}</td>
-      <td>${escapeHtml(item.status)}</td>
+      <td>${renderExplainedValue(formatStatus(item.status), t("tooltip.statusValue"))}</td>
     </tr>
   `).join("");
   return `
@@ -371,11 +481,11 @@ function renderTable(rows) {
       <thead>
         <tr>
           <th>${escapeHtml(t("table.preference"))}</th>
-          <th>${escapeHtml(t("table.frequency"))}</th>
-          <th>${escapeHtml(t("table.sessions"))}</th>
-          <th>${escapeHtml(t("table.confidence"))}</th>
-          <th>${escapeHtml(t("table.liveConfidence"))}</th>
-          <th>${escapeHtml(t("table.status"))}</th>
+          <th>${renderExplainedValue(t("table.frequency"), t("tooltip.frequency"), "info-label")}</th>
+          <th>${renderExplainedValue(t("table.sessions"), t("tooltip.sessions"), "info-label")}</th>
+          <th>${renderExplainedValue(t("table.confidence"), t("tooltip.confidence"), "info-label")}</th>
+          <th>${renderExplainedValue(t("table.liveConfidence"), t("tooltip.liveConfidence"), "info-label")}</th>
+          <th>${renderExplainedValue(t("table.status"), t("tooltip.status"), "info-label")}</th>
         </tr>
       </thead>
       <tbody>${body}</tbody>
@@ -454,8 +564,8 @@ function renderConflictSide(item, label) {
       <p class="side-label">${escapeHtml(label)}</p>
       <p class="conflict-statement">${escapeHtml(item.statement)}</p>
       <dl class="side-facts">
-        <div><dt>${escapeHtml(t("table.status"))}</dt><dd>${escapeHtml(item.status)}</dd></div>
-        <div><dt>${escapeHtml(t("conflict.confidence"))}</dt><dd>${escapeHtml(item.confidence)}</dd></div>
+        <div><dt>${escapeHtml(t("table.status"))}</dt><dd>${escapeHtml(formatStatus(item.status))}</dd></div>
+        <div><dt>${escapeHtml(t("conflict.confidence"))}</dt><dd>${escapeHtml(formatConfidence(item.confidence))}</dd></div>
         <div><dt>${escapeHtml(t("conflict.scope"))}</dt><dd>${escapeHtml(item.applies_to || t("conflict.notSpecified"))}</dd></div>
       </dl>
       ${evidence ? `<div class="definition compact"><strong>${escapeHtml(t("detail.evidence"))}</strong><ul>${evidence}</ul></div>` : ""}
@@ -497,8 +607,17 @@ function renderLiveConfidence(item) {
   return `
     <div class="confidence-cell">
       <meter min="0" max="1" value="${escapeAttr(value.toFixed(4))}"></meter>
-      <span>${escapeHtml(value.toFixed(2))} ${escapeHtml(label)}</span>
+      ${renderExplainedValue(`${value.toFixed(2)} ${formatConfidence(label)}`, t("tooltip.liveValue"))}
     </div>
+  `;
+}
+
+function renderExplainedValue(value, tooltip, className = "") {
+  const classes = ["explain-value", className].filter(Boolean).join(" ");
+  return `
+    <span class="${escapeAttr(classes)}" tabindex="0" aria-label="${escapeAttr(`${value}: ${tooltip}`)}" data-tooltip="${escapeAttr(tooltip)}">
+      ${escapeHtml(value)}
+    </span>
   `;
 }
 
@@ -518,6 +637,7 @@ function renderConfidenceFactors(item) {
         <span>${escapeHtml(scoreValue(item).toFixed(2))}</span>
       </div>
       <dl class="factor-grid">${rows}</dl>
+      <p class="muted">${escapeHtml(t("tooltip.liveDetail"))}</p>
       ${reasons ? `<p class="muted">${escapeHtml(reasons)}</p>` : ""}
     </div>
   `;
@@ -536,6 +656,32 @@ function formatSigned(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return value;
   return `${number >= 0 ? "+" : ""}${number.toFixed(2)}`;
+}
+
+function localizedLookup(namespace, value) {
+  const key = String(value ?? "").trim();
+  if (!key) return "";
+  return t(`${namespace}.${key}`) === `${namespace}.${key}` ? key : t(`${namespace}.${key}`);
+}
+
+function formatStatus(value) {
+  return localizedLookup("status", value);
+}
+
+function formatConfidence(value) {
+  return localizedLookup("confidence", value);
+}
+
+function formatMode(value) {
+  return localizedLookup("mode", value);
+}
+
+function formatCapStatus(summary) {
+  if (!summary || !summary.cap_review_required) {
+    return t("summary.capReviewOk");
+  }
+  const count = Number(summary.cap_review_candidates || 0);
+  return count > 0 ? `${t("summary.capReviewNeeded")} ${count}` : t("summary.capReviewNeeded");
 }
 
 function renderEvolution(data) {
@@ -570,32 +716,32 @@ function renderFitting(data) {
   const changeRows = changes.map(renderFittingChange).join("");
   const reviewActions = pendingChanges ? `
     <div class="actions fitting-actions">
-      <button data-fitting-apply="selected" data-job-id="${escapeAttr(job.job_id || "")}">Accept Selected</button>
-      <button data-fitting-apply="all" data-job-id="${escapeAttr(job.job_id || "")}">Accept All</button>
-      <button data-fitting-reject data-job-id="${escapeAttr(job.job_id || "")}">Reject All</button>
+      <button data-fitting-apply="selected" data-job-id="${escapeAttr(job.job_id || "")}">${escapeHtml(t("fitting.acceptSelected"))}</button>
+      <button data-fitting-apply="all" data-job-id="${escapeAttr(job.job_id || "")}">${escapeHtml(t("fitting.acceptAll"))}</button>
+      <button data-fitting-reject data-job-id="${escapeAttr(job.job_id || "")}">${escapeHtml(t("fitting.rejectAll"))}</button>
     </div>
   ` : "";
   const reportMarkdown = String(job.report_markdown || "").trim();
   const reportBlock = reportMarkdown
     ? `<pre class="report-block">${escapeHtml(reportMarkdown)}</pre>`
-    : `<p class="empty">${escapeHtml(job.report_error || "The report file is not available from the UI.")}</p>`;
+    : `<p class="empty">${escapeHtml(job.report_error || t("fitting.reportUnavailable"))}</p>`;
   return `
     <div class="definition">
-      <h3>${escapeHtml(job.job_id || "Fitting")}</h3>
-      <p class="muted">${escapeHtml(job.status || "unknown")} | ${escapeHtml(job.version || "")}</p>
-      ${pendingChanges ? `<p class="theorem">${escapeHtml(pendingChanges)} changes pending review. Nothing has been written yet.</p>` : ""}
-      <p>${escapeHtml(instructions.text || "No instructions were provided.")}</p>
+      <h3>${escapeHtml(job.job_id || t("fitting.defaultTitle"))}</h3>
+      <p class="muted">${escapeHtml(formatStatus(job.status || "unknown"))} | ${escapeHtml(job.version || "")}</p>
+      ${pendingChanges ? `<p class="theorem">${escapeHtml(pendingChanges)} ${escapeHtml(t("fitting.pendingNotice"))}</p>` : ""}
+      <p>${escapeHtml(instructions.text || t("fitting.noInstructions"))}</p>
       <dl class="factor-grid">
-        <div><dt>Insights</dt><dd>${escapeHtml(stats.insights_proposed || 0)}</dd></div>
-        <div><dt>Rot</dt><dd>${escapeHtml(stats.rot_suggestions || 0)}</dd></div>
-        <div><dt>Conflicts</dt><dd>${escapeHtml(stats.conflicts || 0)}</dd></div>
-        <div><dt>Ignored</dt><dd>${escapeHtml(stats.ignored_by_instruction || 0)}</dd></div>
+        <div><dt>${escapeHtml(t("fitting.insights"))}</dt><dd>${escapeHtml(stats.insights_proposed || 0)}</dd></div>
+        <div><dt>${escapeHtml(t("fitting.rot"))}</dt><dd>${escapeHtml(stats.rot_suggestions || 0)}</dd></div>
+        <div><dt>${escapeHtml(t("fitting.conflicts"))}</dt><dd>${escapeHtml(stats.conflicts || 0)}</dd></div>
+        <div><dt>${escapeHtml(t("fitting.ignored"))}</dt><dd>${escapeHtml(stats.ignored_by_instruction || 0)}</dd></div>
       </dl>
       <p class="muted">${escapeHtml(job.report_file || "")}</p>
-      ${changeRows ? `<h3>Proposed Changes</h3><div class="fitting-change-list">${changeRows}</div>${reviewActions}` : ""}
-      <h3>Report</h3>
+      ${changeRows ? `<h3>${escapeHtml(t("fitting.proposedChanges"))}</h3><div class="fitting-change-list">${changeRows}</div>${reviewActions}` : ""}
+      <h3>${escapeHtml(t("fitting.report"))}</h3>
       ${reportBlock}
-      ${commands ? `<div class="definition compact"><strong>Next</strong><ul>${commands}</ul></div>` : ""}
+      ${commands ? `<div class="definition compact"><strong>${escapeHtml(t("fitting.next"))}</strong><ul>${commands}</ul></div>` : ""}
     </div>
   `;
 }
@@ -611,7 +757,7 @@ function renderFittingChange(change) {
       <input type="checkbox" data-change-id="${escapeAttr(change.change_id || "")}" ${pending ? "checked" : "disabled"}>
       <span>
         <strong>${escapeHtml(change.type || "")}: ${escapeHtml(title)}</strong>
-        <small>${escapeHtml(change.change_id || "")} | ${escapeHtml(change.risk || "")} | ${escapeHtml(change.status || "pending")}</small>
+        <small>${escapeHtml(change.change_id || "")} | ${escapeHtml(change.risk || "")} | ${escapeHtml(formatStatus(change.status || "pending"))}</small>
         ${detail ? `<em>${escapeHtml(detail)}</em>` : ""}
       </span>
     </label>
@@ -710,7 +856,7 @@ function renderSettings(data) {
   return `
     <div class="definition">
       <h3>${escapeHtml(t("settings.userMode"))}</h3>
-      <p class="muted">${escapeHtml(t("settings.configuredMode"))}: ${escapeHtml(data.configured_mode)}</p>
+      <p class="muted">${escapeHtml(t("settings.configuredMode"))}: ${escapeHtml(formatMode(data.configured_mode))}</p>
       <div class="select-row">
         <select id="mode-select" data-setting="mode">
           <option value="curate" ${data.configured_mode === "curate" ? "selected" : ""}>${escapeHtml(t("settings.curate"))}</option>
@@ -834,7 +980,7 @@ function bindFittingReview() {
         body: JSON.stringify({job_id: jobId, accepted_change_ids: accepted})
       });
       if (result.ok === false) {
-        window.alert(result.error || "Fitting apply failed.");
+        window.alert(result.error || t("fitting.applyFailed"));
       }
       await load();
     });

@@ -14,7 +14,7 @@ from preference_agent.engine import PreferenceEngine
 from preference_agent.executive_summary import refresh_executive_summary
 from preference_agent.feedback import record_feedback
 from preference_agent.mcp_server import handle_request
-from preference_agent.models import PreferenceRecord
+from preference_agent.models import Evidence, PreferenceRecord
 from preference_agent.store import MarkdownPreferenceStore
 from preference_agent.ui.server import build_manifesto, ensure_ui_server, shutdown_ui_server
 
@@ -122,6 +122,38 @@ class UiPanelTests(unittest.TestCase):
             self.assertIn("concise", group["left"]["statement"])
             self.assertIn("exhaustive", group["right"]["statement"])
 
+    def test_manifesto_maps_evidence_to_frequency_and_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = root / "prefs.md"
+            MarkdownPreferenceStore(store).save(
+                [
+                    PreferenceRecord(
+                        title="Stats",
+                        applies_to="Preference capture",
+                        preference="Preserve real evidence statistics.",
+                        status="active",
+                        confidence="high",
+                        evidence=[
+                            Evidence(source="history.jsonl#1", session_id="session-a", quote="first"),
+                            Evidence(source="history.jsonl#2", session_id="session-a", quote="second"),
+                            Evidence(source="history.jsonl#3", session_id="session-b", quote="third"),
+                        ],
+                    )
+                ]
+            )
+
+            manifesto = build_manifesto(
+                store_path=store,
+                feedback_log=root / "feedback.jsonl",
+                settings_path=root / "settings.json",
+                event_log=root / "events.jsonl",
+            )
+
+            row = manifesto["preferences"][0]
+            self.assertEqual(row["frequency"], 3)
+            self.assertEqual(row["sessions"], 2)
+
     def test_local_server_serves_manifesto_and_settings_api(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -145,13 +177,19 @@ class UiPanelTests(unittest.TestCase):
 
             with urlopen(info.url + "/index.html", timeout=5) as response:
                 html = response.read().decode("utf-8")
-            self.assertIn('href="/static/favicon.png"', html)
+            self.assertIn('href="/static/favicon.png?v=', html)
 
             with urlopen(info.url + "/static/favicon.png", timeout=5) as response:
                 favicon = response.read()
                 content_type = response.headers.get("Content-Type", "")
             self.assertEqual(content_type, "image/png")
             self.assertTrue(favicon.startswith(b"\x89PNG\r\n\x1a\n"))
+
+            with urlopen(info.url + "/static/brand-logo.png", timeout=5) as response:
+                brand_logo = response.read()
+                content_type = response.headers.get("Content-Type", "")
+            self.assertEqual(content_type, "image/png")
+            self.assertTrue(brand_logo.startswith(b"\x89PNG\r\n\x1a\n"))
 
             request = Request(
                 info.url + "/api/settings",
