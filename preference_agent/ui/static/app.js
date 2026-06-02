@@ -17,7 +17,6 @@ const i18n = {
       all: "All",
       pending: "Pending",
       conflicts: "Conflicts",
-      evolution: "Evolution",
       fitting: "Fitting",
       injection: "Injection",
       settings: "Settings"
@@ -26,7 +25,6 @@ const i18n = {
       all: "1.2 High-Frequency Preferences",
       pending: "1.3 Pending Confirmation",
       conflicts: "1.4 Conflict Review",
-      evolution: "1.5 Evolution",
       fitting: "1.6 Fitting Report",
       injection: "1.7 Injection Log",
       settings: "1.8 Settings"
@@ -62,9 +60,15 @@ const i18n = {
       statement: "Statement",
       theorem: "Theorem.",
       definition: "Definition.",
+      scope: "Scope",
+      confidence: "Confidence",
+      occurrences: "Occurrences",
       liveConfidence: "Apply tendency.",
       factors: "Factors.",
       evidence: "Evidence.",
+      evidenceSummary: "Distilled from {count} evidence(s) across {sessions} session(s).",
+      evidenceSources: "Evidence sources ({count})",
+      notSpecified: "Not specified",
       noEvidence: "No stored evidence in the Markdown view.",
       confirm: "Confirm",
       reject: "Reject",
@@ -91,14 +95,6 @@ const i18n = {
       confidence: "Confidence",
       scope: "Scope",
       notSpecified: "Not specified"
-    },
-    evolution: {
-      preference: "Preference",
-      use: "Use",
-      confirm: "Confirm",
-      correct: "Correct",
-      reject: "Reject",
-      recommendation: "Recommendation"
     },
     injection: {
       time: "Time",
@@ -179,7 +175,6 @@ const i18n = {
       all: "全部",
       pending: "待确认",
       conflicts: "冲突",
-      evolution: "演化",
       fitting: "Fitting",
       injection: "注入日志",
       settings: "设置"
@@ -188,7 +183,6 @@ const i18n = {
       all: "1.2 高频偏好",
       pending: "1.3 待确认偏好",
       conflicts: "1.4 冲突审查",
-      evolution: "1.5 偏好演化",
       fitting: "1.6 Fitting 报告",
       injection: "1.7 注入日志",
       settings: "1.8 设置"
@@ -223,10 +217,16 @@ const i18n = {
     detail: {
       statement: "偏好内容",
       theorem: "冲突备注",
-      definition: "证据",
+      definition: "定义",
+      scope: "适用范围",
+      confidence: "可信度",
+      occurrences: "出现次数",
       liveConfidence: "采用倾向",
       factors: "因素",
       evidence: "证据",
+      evidenceSummary: "从 {sessions} 个会话的 {count} 条证据中提炼。",
+      evidenceSources: "证据来源（{count}）",
+      notSpecified: "未指定",
       noEvidence: "Markdown 视图中没有保存证据。",
       confirm: "确认",
       reject: "拒绝",
@@ -253,14 +253,6 @@ const i18n = {
       confidence: "可信度",
       scope: "适用范围",
       notSpecified: "未指定"
-    },
-    evolution: {
-      preference: "偏好",
-      use: "使用",
-      confirm: "确认",
-      correct: "修正",
-      reject: "拒绝",
-      recommendation: "建议"
     },
     injection: {
       time: "时间",
@@ -340,6 +332,12 @@ function t(path) {
   return path.split(".").reduce((value, key) => value && value[key], i18n[language()]) || path;
 }
 
+function formatMessage(path, values = {}) {
+  return t(path).replace(/\{(\w+)\}/g, (match, key) => (
+    Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : match
+  ));
+}
+
 async function request(path, options = {}) {
   const response = await fetch(path, {
     headers: {"Content-Type": "application/json"},
@@ -379,10 +377,6 @@ function render() {
   document.getElementById("executive-text").innerHTML = renderExecutiveSummary(data.executive_summary);
 
   const content = document.getElementById("content");
-  if (state.tab === "evolution") {
-    content.innerHTML = renderEvolution(data);
-    return;
-  }
   if (state.tab === "injection") {
     content.innerHTML = renderInjectionLog(data);
     return;
@@ -575,10 +569,29 @@ function renderConflictSide(item, label) {
 }
 
 function renderDetail(item) {
-  const evidence = item.evidence.length
-    ? item.evidence.map((entry, index) => `<li>[${index + 1}] ${escapeHtml(entry.quote || entry.source)}</li>`).join("")
-    : `<li>${escapeHtml(t("detail.noEvidence"))}</li>`;
-  const notes = item.conflict_notes.length
+  const evidenceItems = Array.isArray(item.evidence) ? item.evidence : [];
+  const evidenceCount = evidenceItems.length;
+  const sessionCount = Number(item.sessions || item.session_count || 0);
+  const occurrences = Number(item.frequency || item.occurrences || evidenceCount || 0);
+  const evidenceSummary = evidenceCount
+    ? `<p class="evidence-summary">${escapeHtml(formatMessage("detail.evidenceSummary", { count: evidenceCount, sessions: sessionCount }))}</p>`
+    : "";
+  const evidenceList = evidenceItems
+    .map((entry, index) => {
+      const text = String(entry.quote || "").trim();
+      return text ? `<li>[${index + 1}] ${escapeHtml(text)}</li>` : "";
+    })
+    .filter(Boolean)
+    .join("");
+  const evidenceSection = evidenceList
+    ? `
+      <details class="evidence-fold">
+        <summary>${escapeHtml(formatMessage("detail.evidenceSources", { count: evidenceCount }))}</summary>
+        <ul>${evidenceList}</ul>
+      </details>
+    `
+    : "";
+  const notes = (item.conflict_notes || []).length
     ? `<div class="theorem"><strong>${escapeHtml(t("detail.theorem"))}</strong> ${escapeHtml(item.conflict_notes.join(" "))}</div>`
     : "";
   const factors = renderConfidenceFactors(item);
@@ -586,11 +599,17 @@ function renderDetail(item) {
     <div class="details">
       <h3>${escapeHtml(t("detail.statement"))}</h3>
       <p>${escapeHtml(item.statement)}</p>
+      <dl class="meta-grid">
+        <div><dt>${escapeHtml(t("detail.scope"))}</dt><dd>${escapeHtml(item.applies_to || t("detail.notSpecified"))}</dd></div>
+        <div><dt>${escapeHtml(t("detail.confidence"))}</dt><dd>${escapeHtml(formatConfidence(item.confidence))}</dd></div>
+        <div><dt>${escapeHtml(t("detail.occurrences"))}</dt><dd>${escapeHtml(occurrences)}</dd></div>
+      </dl>
       ${notes}
       ${factors}
       <div class="definition">
         <strong>${escapeHtml(t("detail.definition"))}</strong>
-        <ul>${evidence}</ul>
+        ${evidenceSummary || `<p class="muted">${escapeHtml(t("detail.noEvidence"))}</p>`}
+        ${evidenceSection}
       </div>
       <div class="actions">
         <button data-feedback="confirmation" data-id="${escapeHtml(item.id)}" data-text="${escapeAttr(item.statement)}">${escapeHtml(t("detail.confirm"))}</button>
@@ -682,25 +701,6 @@ function formatCapStatus(summary) {
   }
   const count = Number(summary.cap_review_candidates || 0);
   return count > 0 ? `${t("summary.capReviewNeeded")} ${count}` : t("summary.capReviewNeeded");
-}
-
-function renderEvolution(data) {
-  const rows = (data.feedback.by_preference || []).map((item) => `
-    <tr>
-      <td>${escapeHtml(item.preference)}</td>
-      <td>${item.usage}</td>
-      <td>${item.confirmation}</td>
-      <td>${item.correction}</td>
-      <td>${item.rejection}</td>
-      <td>${escapeHtml(item.recommendation)}</td>
-    </tr>
-  `).join("");
-  return rows ? `
-    <table class="table">
-      <thead><tr><th>${escapeHtml(t("evolution.preference"))}</th><th>${escapeHtml(t("evolution.use"))}</th><th>${escapeHtml(t("evolution.confirm"))}</th><th>${escapeHtml(t("evolution.correct"))}</th><th>${escapeHtml(t("evolution.reject"))}</th><th>${escapeHtml(t("evolution.recommendation"))}</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-  ` : `<p class="empty">${escapeHtml(t("empty.feedback"))}</p>`;
 }
 
 function renderFitting(data) {

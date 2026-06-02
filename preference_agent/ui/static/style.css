@@ -433,6 +433,47 @@ details > summary:hover {
   margin-bottom: 0;
 }
 
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--space-xs);
+  margin: var(--space-sm) 0;
+}
+
+.meta-grid dt {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.meta-grid dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.evidence-summary {
+  margin: var(--space-sm) 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.evidence-fold {
+  margin-top: var(--space-xs);
+}
+
+.evidence-fold summary {
+  color: var(--accent);
+}
+
+.evidence-fold ul {
+  margin-top: var(--space-xs);
+  padding-left: 1.2rem;
+}
+
+.evidence-fold li {
+  overflow-wrap: anywhere;
+}
+
 .theorem {
   border-color: var(--border);
   background: var(--bg-tertiary);

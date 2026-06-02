@@ -16,7 +16,7 @@ from preference_agent.feedback import record_feedback
 from preference_agent.mcp_server import handle_request
 from preference_agent.models import Evidence, PreferenceRecord
 from preference_agent.store import MarkdownPreferenceStore
-from preference_agent.ui.server import build_manifesto, ensure_ui_server, shutdown_ui_server
+from preference_agent.ui.server import STATIC_DIR, build_manifesto, ensure_ui_server, shutdown_ui_server
 
 
 def post_json(url: str, payload: dict[str, object]) -> dict[str, object]:
@@ -206,6 +206,35 @@ class UiPanelTests(unittest.TestCase):
             with urlopen(info.url + "/api/manifesto", timeout=5) as response:
                 localized = json.loads(response.read().decode("utf-8"))
             self.assertEqual(localized["language"], "zh")
+
+    def test_static_ui_assets_do_not_expose_evolution_tab(self) -> None:
+        index_html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        style_css = (STATIC_DIR / "style.css").read_text(encoding="utf-8")
+
+        self.assertNotIn('data-tab="evolution"', index_html)
+        self.assertNotIn("tabs.evolution", app_js)
+        self.assertNotIn('state.tab === "evolution"', app_js)
+        self.assertNotIn("renderEvolution", app_js)
+        self.assertNotIn("evolution", style_css.lower())
+
+    def test_static_preference_detail_uses_definition_summary(self) -> None:
+        app_js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        detail_start = app_js.index("function renderDetail")
+        detail_end = app_js.index("function renderLiveConfidence")
+        detail_js = app_js[detail_start:detail_end]
+
+        self.assertIn('class="meta-grid"', detail_js)
+        self.assertIn("detail.scope", detail_js)
+        self.assertIn("detail.confidence", detail_js)
+        self.assertIn("detail.occurrences", detail_js)
+        self.assertIn("detail.evidenceSummary", detail_js)
+        self.assertIn('class="evidence-fold"', detail_js)
+        self.assertNotIn("text.slice(0, 80)", detail_js)
+        self.assertNotIn("entry.source", detail_js)
+        self.assertIn('data-feedback="confirmation"', detail_js)
+        self.assertIn('data-feedback="rejection"', detail_js)
+        self.assertIn('data-feedback="correction"', detail_js)
 
     def test_mcp_open_preference_panel_returns_local_url(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
