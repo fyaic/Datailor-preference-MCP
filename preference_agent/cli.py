@@ -37,6 +37,9 @@ def build_engine(args: argparse.Namespace) -> PreferenceEngine:
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    from .config_env import load_local_env
+
+    load_local_env()
     raw_argv = list(argv if argv is not None else sys.argv[1:])
     parser = argparse.ArgumentParser(prog="datailor")
     common = argparse.ArgumentParser(add_help=False)
@@ -44,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     common.add_argument("--backend", default=argparse.SUPPRESS)
     parser.add_argument("--store", default=str(default_store_path()), help="Markdown preference store path")
     parser.add_argument("--backend", default=os.getenv("PREFERENCE_MODEL_BACKEND", "heuristic"))
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=False)
 
     doctor = sub.add_parser("doctor", parents=[common], help="Check Datailor onboarding status")
     doctor.add_argument("--agent", default=os.getenv("PREFERENCE_CALLER_AGENT", "codex"))
@@ -70,6 +73,19 @@ def main(argv: list[str] | None = None) -> int:
     onboard.add_argument("--integrate-dry-run", action="store_true", help="Preview --integrate-client changes without writing client config")
     onboard.add_argument("--json", action="store_true", help="Print structured JSON instead of the human summary")
     onboard.add_argument("--quiet", action="store_true", help="Print only the final status and next command")
+    onboard.add_argument(
+        "--interactive",
+        dest="interactive",
+        action="store_true",
+        default=None,
+        help="Force the interactive setup wizard",
+    )
+    onboard.add_argument(
+        "--no-interactive",
+        dest="interactive",
+        action="store_false",
+        help="Force the classic non-interactive onboarding flow",
+    )
 
     install_rules = sub.add_parser("install-agent-rules", help="Install or update the Datailor managed block in AGENTS.md")
     install_rules.add_argument("--target", default="", help="Target AGENTS.md path; defaults to ~/AGENTS.md")
@@ -220,6 +236,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("summary-show", parents=[common], help="Show the current UX Executive Summary")
 
     args = parser.parse_args(argv)
+    if not args.command:
+        return _print_welcome_hint(Path(args.store))
     args.store = Path(args.store)
     engine = build_engine(args)
 
@@ -231,6 +249,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return _print(status.to_dict())
     if args.command == "onboard":
+        if _should_run_setup_tui(args, raw_argv):
+            from .setup_tui import run_setup_wizard
+
+            return run_setup_wizard(store_path=args.store, agent_hint=args.agent, backend=args.backend)
         progress = None if args.json or args.quiet else _cold_start_progress_printer()
         result = run_onboarding(
             store_path=args.store,
@@ -488,6 +510,43 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
+def _print_welcome_hint(store_path: Path) -> int:
+    """First-run banner shown when `datailor` is run without a subcommand."""
+
+    initialized = store_path.exists()
+    primary = "datailor doctor" if initialized else "datailor onboard"
+    headline = "Welcome back to Datailor" if initialized else "Welcome to Datailor"
+    try:
+        for stream in (sys.stdout, sys.stderr):
+            reconfigure = getattr(stream, "reconfigure", None)
+            if callable(reconfigure):
+                try:
+                    reconfigure(encoding="utf-8")
+                except (ValueError, OSError):
+                    pass
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.text import Text
+
+        console = Console(legacy_windows=False)
+        body = Table.grid(padding=(0, 2))
+        body.add_column(style="bold cyan", no_wrap=True)
+        body.add_column()
+        body.add_row("› RUN", f"[bold green]{primary}[/]")
+        if not initialized:
+            body.add_row("", "[dim]Guided setup: model API, AGENTS.md, scan, integrations[/]")
+        body.add_row("datailor ui", "Review and curate your preferences")
+        body.add_row("datailor --help", "All commands")
+        console.print(
+            Panel(body, title=Text(headline, style="bold cyan"), border_style="cyan", padding=(1, 2))
+        )
+    except Exception:
+        # Never let a rendering hiccup break the bare invocation.
+        print(f"{headline}\n  RUN: {primary}\n  datailor --help for all commands")
+    return 0
+
+
 def _print(data: dict[str, Any]) -> int:
     print(json.dumps(data, ensure_ascii=False, indent=2))
     return 0
@@ -549,6 +608,46 @@ def _print_kimi_hooks_notice(result: dict[str, Any]) -> None:
 def _arg_was_provided(argv: list[str], name: str) -> bool:
     prefix = f"{name}="
     return any(item == name or item.startswith(prefix) for item in argv)
+
+
+def _should_run_setup_tui(args: argparse.Namespace, raw_argv: list[str]) -> bool:
+    """Decide whether a bare, interactive `onboard` should launch the TUI wizard.
+
+    The classic non-interactive flow is preserved whenever the user passes
+    onboard-specific flags, requests JSON/quiet output, or the session is not a
+    real TTY. `--interactive`/`--no-interactive` force the decision.
+    """
+
+    interactive = getattr(args, "interactive", None)
+    if interactive is False:
+        return False
+    if args.json or args.quiet:
+        return False
+    if interactive is True:
+        return True
+    if not _onboard_is_bare(raw_argv):
+        return False
+    return bool(getattr(sys.stdin, "isatty", lambda: False)() and getattr(sys.stdout, "isatty", lambda: False)())
+
+
+def _onboard_is_bare(raw_argv: list[str]) -> bool:
+    """True when `onboard` carries no flags beyond global store/backend/agent."""
+
+    if "onboard" not in raw_argv:
+        return True
+    rest = raw_argv[raw_argv.index("onboard") + 1 :]
+    passthrough = {"--store", "--backend", "--agent"}
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        if token in passthrough:
+            index += 2
+            continue
+        if any(token.startswith(f"{name}=") for name in passthrough):
+            index += 1
+            continue
+        return False
+    return True
 
 
 def _cold_start_progress_printer():

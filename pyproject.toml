@@ -3,7 +3,10 @@ name = "datailor-preference-mcp"
 version = "0.1.0"
 description = "Local-first personal preference MCP with Markdown store, capture pipeline, injection, and UI"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "rich>=13.0",
+    "questionary>=2.0",
+]
 
 [project.scripts]
 datailor = "preference_agent.cli:main"

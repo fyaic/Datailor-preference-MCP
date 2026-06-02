@@ -24,7 +24,13 @@ For normal use, install from GitHub with `pipx`. After installation, `datailor` 
 python -m pip install --user pipx
 python -m pipx ensurepath
 pipx install git+https://github.com/fyaic/Datailor-preference-MCP.git
+
+datailor onboard   # 👈 one command: guided interactive setup
 ```
+
+`datailor onboard` launches an interactive wizard (model API, AGENTS.md rules,
+fitting mode, agent integrations, history scan). Running `datailor` with no
+command shows the same hint, so you always know what to run next.
 
 Check the installation:
 
@@ -72,13 +78,44 @@ $env:PREFERENCE_STORE_PATH = "D:\Datailor\personal-preferences.md"
 
 ## First Run
 
+### Guided setup (interactive)
+
+Run `onboard` with no extra flags in a terminal to launch the interactive setup
+wizard:
+
+```powershell
+datailor onboard
+```
+
+The wizard walks you through, OpenClaw-style, with arrow-key menus and a
+polished terminal UI:
+
+1. **Model backend** — local heuristic (zero config) or an OpenAI-compatible API
+   (base URL / API key / model name, with an optional live connectivity check).
+   Saved to `<data_dir>\datailor.env`.
+2. **AGENTS.md rules** — preview and install the Datailor managed block.
+3. **Fitting mode** — `curate` (review changes first) or `auto` (auto-apply
+   high-confidence changes).
+4. **Agent integrations** — register Datailor as an MCP server in detected
+   Codex / Claude Code / Kimi clients.
+5. **History scan** — run a full cold-start capture (or dry-run preview) with
+   live progress.
+
+`datailor` and `datailor-mcp` auto-load saved config from
+`<data_dir>\datailor.env` and a project-local `.env.local` on startup (real
+environment variables always take precedence). Force the mode with
+`--interactive` / `--no-interactive`.
+
+### Scripted / non-interactive
+
 Inspect the current state:
 
 ```powershell
 datailor doctor --agent codex
 ```
 
-Cold-start scan local agent histories:
+Cold-start scan local agent histories (any flags, `--json`, `--quiet`, or
+`--no-interactive` keep the classic non-interactive flow):
 
 ```powershell
 datailor onboard --agent codex --mode recall-extract

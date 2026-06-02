@@ -40,6 +40,9 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     if hasattr(sys.stdin, "reconfigure"):
         sys.stdin.reconfigure(encoding="utf-8")
+    from .config_env import load_local_env
+
+    load_local_env()
     parser = argparse.ArgumentParser(prog="datailor-mcp")
     parser.add_argument("--agent", default=os.getenv("PREFERENCE_CALLER_AGENT", ""))
     parser.add_argument("--store", default=os.getenv("PREFERENCE_STORE_PATH", ""))
