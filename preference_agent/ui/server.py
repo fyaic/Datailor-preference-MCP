@@ -100,6 +100,15 @@ def build_manifesto(
     events = _read_jsonl(event_log)
     injection_events = read_injection_log(store_path, path=injection_log, limit=200)
     feedback = feedback_report(feedback_log)
+    # Lazy resolution: 为空的 preference_text 从 store 补全
+    for bucket in feedback.get("by_preference", []):
+        if not bucket.get("preference_text"):
+            pref_id = bucket.get("preference_id") or bucket.get("preference")
+            if pref_id and pref_id != "unknown":
+                for record in records:
+                    if record.id == pref_id:
+                        bucket["preference_text"] = _statement(record)
+                        break
     feedback_by_preference = {
         str(item.get("preference")): item
         for item in feedback.get("by_preference", [])
@@ -209,6 +218,42 @@ def shutdown_ui_server() -> None:
         server.server_close()
     if thread is not None:
         thread.join(timeout=2)
+
+
+def serve_preference_panel(
+    store_path: str | Path | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    open_browser: bool = True,
+    on_ready: "Callable[[UiServerInfo], None] | None" = None,
+) -> UiServerInfo:
+    """Run a foreground UI server (blocking) until interrupted.
+
+    Unlike `ensure_ui_server`, which starts a daemon thread for long-lived host
+    processes (the MCP server), this keeps the *current* process alive serving
+    the panel. One-shot CLI flows such as `datailor onboard` need this: the
+    daemon-thread server would otherwise die the instant the CLI process exits,
+    leaving the freshly opened browser link with nothing to connect to.
+
+    `on_ready` is invoked with the bound `UiServerInfo` after the socket is
+    listening but before the browser opens, so callers can render the URL.
+    """
+
+    server, info = _create_server(store_path=store_path, host=host, port=port)
+    if on_ready is not None:
+        try:
+            on_ready(info)
+        except Exception:
+            pass
+    if open_browser:
+        webbrowser.open(info.url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return info
 
 
 def run_ui_server(

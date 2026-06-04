@@ -48,6 +48,16 @@ const i18n = {
       injection: "No injection events have been recorded yet. Start a session or call get_preference_decision to populate this timeline.",
       missingSide: "Missing side."
     },
+    status: {
+      connecting: "Connecting to Datailor…",
+      connectingHint: "Starting the local preference server. This page will load automatically.",
+      unreachable: "Can't reach the Datailor UI server.",
+      unreachableHint: "The server may have stopped. Re-run `datailor ui`, then refresh this page."
+    },
+    capturing: {
+      title: "No preferences captured yet",
+      body: "Datailor is still learning. Run a history scan with `datailor onboard`, or just keep using your AI — preferences appear here automatically as they are captured."
+    },
     table: {
       preference: "Preference",
       frequency: "Freq.",
@@ -206,6 +216,16 @@ const i18n = {
       injection: "还没有注入事件。启动一次会话或调用 get_preference_decision 后，这里会显示时间线。",
       missingSide: "缺少一侧内容。"
     },
+    status: {
+      connecting: "正在连接 Datailor…",
+      connectingHint: "正在启动本地偏好服务，页面会自动加载。",
+      unreachable: "无法连接 Datailor UI 服务。",
+      unreachableHint: "服务可能已停止。重新运行 `datailor ui`，然后刷新本页。"
+    },
+    capturing: {
+      title: "还没有捕获到偏好",
+      body: "Datailor 还在学习。用 `datailor onboard` 跑一次历史扫描，或继续正常使用 AI —— 捕获到的偏好会自动出现在这里。"
+    },
     table: {
       preference: "偏好",
       frequency: "频次",
@@ -349,10 +369,54 @@ async function request(path, options = {}) {
   return response.json();
 }
 
-async function load() {
-  state.manifesto = await request("/api/manifesto");
-  document.body.dataset.theme = state.manifesto.theme || "light";
-  render();
+const RETRY = { attempts: 0, max: 40, delayMs: 500 };
+
+function showStatus(message, hint, options = {}) {
+  const content = document.getElementById("content");
+  if (!content) return;
+  const spinner = options.spinner === false ? "" : `<div class="status-spinner" aria-hidden="true"></div>`;
+  content.innerHTML = `<div class="status-screen">
+    ${spinner}
+    <p class="status-message">${escapeHtml(message)}</p>
+    ${hint ? `<p class="muted status-hint">${escapeHtml(hint)}</p>` : ""}
+  </div>`;
+}
+
+async function load({ retry = true } = {}) {
+  try {
+    state.manifesto = await request("/api/manifesto");
+    RETRY.attempts = 0;
+    document.body.dataset.theme = state.manifesto.theme || "light";
+    render();
+  } catch (error) {
+    // The server may still be starting (browser opened a beat early) or have
+    // stopped. Retry quietly with a visible "connecting" state instead of a
+    // blank screen, then surface a clear message if it stays unreachable.
+    if (retry && RETRY.attempts < RETRY.max) {
+      RETRY.attempts += 1;
+      showStatus(t("status.connecting"), t("status.connectingHint"));
+      setTimeout(() => load({ retry: true }), RETRY.delayMs);
+      return;
+    }
+    const detail = error && error.message ? error.message : "";
+    showStatus(t("status.unreachable"), `${t("status.unreachableHint")}${detail ? "\n" + detail : ""}`, { spinner: false });
+  }
+}
+
+function renderAppBanner(data) {
+  const banner = document.getElementById("app-banner");
+  if (!banner) return;
+  const count = (data.summary && data.summary.preference_count) || 0;
+  if (count > 0) {
+    banner.hidden = true;
+    banner.innerHTML = "";
+    return;
+  }
+  banner.hidden = false;
+  banner.innerHTML = `<div class="app-banner-inner">
+    <strong>${escapeHtml(t("capturing.title"))}</strong>
+    <p class="muted">${escapeHtml(t("capturing.body"))}</p>
+  </div>`;
 }
 
 function render() {
@@ -363,6 +427,7 @@ function render() {
     button.classList.toggle("active", button.dataset.tab === state.tab);
   });
   renderPendingBadge(data);
+  renderAppBanner(data);
   document.querySelectorAll("[data-language]").forEach((button) => {
     button.classList.toggle("active", button.dataset.language === language());
   });
@@ -1054,6 +1119,5 @@ document.getElementById("search").addEventListener("input", (event) => {
   render();
 });
 
-load().catch((error) => {
-  document.getElementById("content").innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
-});
+showStatus(t("status.connecting"), t("status.connectingHint"));
+load();

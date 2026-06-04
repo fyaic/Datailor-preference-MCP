@@ -423,10 +423,24 @@ class _Wizard:
         self.console.print(Panel(nxt, title="Next steps", border_style="dim", padding=(1, 2)))
 
         if self._confirm("Open the Datailor UI now?", default=False):
-            from .ui.server import open_preference_panel
+            from .ui.server import serve_preference_panel
 
-            info = open_preference_panel(store_path=self.store_path, open_browser=True)
-            self.console.print(f"[green]✓[/] UI: [link]{info.get('url', '')}[/]")
+            def _on_ready(info) -> None:
+                self.console.print(
+                    Panel(
+                        f"[bold green]{info.url}[/]\n[dim]Press Ctrl-C to stop the server and finish setup.[/]",
+                        title=Text("Datailor UI", style="bold cyan"),
+                        border_style="cyan",
+                        padding=(1, 2),
+                    )
+                )
+
+            self.console.print("[dim]Starting the local UI…[/]")
+            # Foreground server: keeps this process alive so the opened link works.
+            serve_preference_panel(store_path=self.store_path, open_browser=True, on_ready=_on_ready)
+            self.console.print("\n[dim]UI stopped. Reopen any time with[/] [bold]datailor ui[/].")
+        else:
+            self.console.print("[dim]Open the panel any time with[/] [bold]datailor ui[/].")
 
     # -- misc ---------------------------------------------------------------
 
