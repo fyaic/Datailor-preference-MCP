@@ -73,11 +73,15 @@ def feedback_report(log_path: str | Path | None = None) -> dict[str, Any]:
     items = _read_feedback(path)
     by_preference: dict[str, dict[str, Any]] = {}
     for item in items:
-        key = item.get("preference_id") or item.get("preference_text") or "unknown"
+        pref_id = item.get("preference_id") or ""
+        pref_text = item.get("preference_text") or ""
+        key = pref_id or pref_text or "unknown"
         bucket = by_preference.setdefault(
             key,
             {
                 "preference": key,
+                "preference_id": pref_id,
+                "preference_text": pref_text,
                 "usage": 0,
                 "correction": 0,
                 "confirmation": 0,
@@ -85,6 +89,9 @@ def feedback_report(log_path: str | Path | None = None) -> dict[str, Any]:
                 "recommendation": "observe",
             },
         )
+        # 同一 ID 的不同 feedback 记录可能有不同的 text，保留最长的
+        if pref_text and len(pref_text) > len(bucket.get("preference_text", "")):
+            bucket["preference_text"] = pref_text
         feedback_type = str(item.get("feedback_type", ""))
         if feedback_type in bucket:
             bucket[feedback_type] += 1
