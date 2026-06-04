@@ -451,6 +451,7 @@ MCP exposes preference decisions, cold-start capture, feedback, hooks, conflict 
 | `start_fitting` | Start a Fitting job in `curate` or `auto` mode |
 | `get_fitting_status` | Read latest or specified Fitting job status |
 | `apply_fitting_plan` | Apply explicitly accepted Fitting changes |
+| `toggle_preferences` | Enable or disable preference injection (`{"enabled": false}`) |
 
 All `decide` / hook / prewarm calls write injection logs. The Manifesto UI Injection Log shows time, agent, session, matched preferences, and the actual injected `agent_instruction`.
 
@@ -464,6 +465,37 @@ datailor prewarm --agent codex --task "prepare a final reply after code implemen
 ```
 
 These artifacts are generated views, not a new preference source. The only canonical source remains `personal-preferences.md`.
+
+## Enabling And Disabling Datailor
+
+The MCP protocol has no native enable/disable switch for a server, so Datailor
+implements the toggle internally at the decision layer rather than by editing
+your client's MCP config. Turning it off does not remove any integration; it
+simply makes the injection tools return empty instructions.
+
+```powershell
+datailor disable   # AI stops receiving preference instructions
+datailor enable    # resume injecting preferences
+datailor status    # show whether Datailor is currently enabled
+```
+
+Agents that can call tools directly may toggle it through MCP:
+
+```json
+{ "name": "toggle_preferences", "arguments": { "enabled": false } }
+```
+
+How it behaves:
+
+- The switch is stored as `DATAILOR_ENABLED` in `<data_dir>/datailor.env` and is
+  re-read on every call, so a CLI toggle takes effect immediately even for a
+  long-running `datailor-mcp` process — no restart needed.
+- When disabled, injection tools (`get_preference_decision`, `hook_user_message`,
+  `hook_session_start`, `prewarm_preferences`) return an empty `agent_instruction`
+  with `decision="disabled"`. Every response also carries `"enabled": false` so
+  the agent knows Datailor is off.
+- Capture is unaffected: turn-complete and behavior-signal hooks keep recording
+  new preferences in the background. Disabling only stops injection, not learning.
 
 ## Conflict Handling
 

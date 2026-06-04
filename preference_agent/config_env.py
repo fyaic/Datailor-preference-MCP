@@ -133,3 +133,20 @@ def update_env_file(
         for key, value in values.items():
             os.environ[key] = str(value)
     return target
+
+
+def is_datailor_enabled() -> bool:
+    """Return whether Datailor preference injection is enabled.
+
+    Re-reads from the persisted env file so that CLI toggles are picked up
+    by long-running MCP server processes without a restart.
+    """
+    env_path = user_env_path()
+    file_values: dict[str, str] = {}
+    if env_path.exists():
+        try:
+            file_values = parse_env_text(env_path.read_text(encoding="utf-8"))
+        except OSError:
+            pass
+    value = file_values.get("DATAILOR_ENABLED", os.getenv("DATAILOR_ENABLED", "true"))
+    return str(value).strip().lower() not in {"false", "0", "no", "off", "disabled"}

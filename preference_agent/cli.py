@@ -235,6 +235,11 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("summary-show", parents=[common], help="Show the current UX Executive Summary")
 
+    sub.add_parser("enable", parents=[common], help="Enable Datailor preference injection")
+    sub.add_parser("disable", parents=[common], help="Disable Datailor preference injection (capture continues)")
+    status_parser = sub.add_parser("status", parents=[common], help="Show Datailor status")
+    status_parser.add_argument("--json", action="store_true", help="Print structured JSON")
+
     args = parser.parse_args(argv)
     if not args.command:
         return _print_welcome_hint(Path(args.store))
@@ -506,6 +511,40 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "summary-show":
         summary = read_executive_summary(args.store)
         return _print({"ok": True, **summary.to_dict()})
+    if args.command == "enable":
+        from .config_env import update_env_file
+
+        update_env_file({"DATAILOR_ENABLED": "true"})
+        return _print({"ok": True, "enabled": True, "message": "Datailor preference injection enabled."})
+    if args.command == "disable":
+        from .config_env import update_env_file
+
+        update_env_file({"DATAILOR_ENABLED": "false"})
+        return _print({"ok": True, "enabled": False, "message": "Datailor preference injection disabled. Capture continues in the background."})
+    if args.command == "status":
+        from .config_env import is_datailor_enabled
+
+        store = MarkdownPreferenceStore(args.store)
+        records = store.load() if store.exists() else []
+        active = [r for r in records if getattr(r, "status", None) == "active"]
+        payload = {
+            "ok": True,
+            "enabled": is_datailor_enabled(),
+            "store": str(args.store),
+            "store_exists": store.exists(),
+            "total_preferences": len(records),
+            "active_preferences": len(active),
+        }
+        if getattr(args, "json", False):
+            return _print(payload)
+        lines = [
+            f"Datailor is {'enabled' if payload['enabled'] else 'disabled'}",
+            f"Store: {payload['store']}",
+            f"Store exists: {payload['store_exists']}",
+            f"Total preferences: {payload['total_preferences']}",
+            f"Active preferences: {payload['active_preferences']}",
+        ]
+        return _print_text("\n".join(lines))
     parser.error("unknown command")
     return 2
 

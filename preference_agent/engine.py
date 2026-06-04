@@ -137,6 +137,30 @@ class PreferenceEngine:
         log_event: bool = True,
     ) -> dict[str, Any]:
         self.store.ensure()
+        from .config_env import is_datailor_enabled
+
+        if not is_datailor_enabled():
+            decision = {
+                "decision": "disabled",
+                "agent_instruction": "",
+                "reason": "Datailor preferences are currently disabled. Run `datailor enable` or set DATAILOR_ENABLED=true to re-enable.",
+                "enabled": False,
+                "matched_preferences": [],
+                "escalate": False,
+                "store": str(self.store.path),
+                "checked_at": now_iso(),
+            }
+            if log_event:
+                log_injection_event(
+                    store_path=self.store.path,
+                    hook=str((context or {}).get("hook") or "decide"),
+                    agent=agent,
+                    task=task,
+                    context=context or {},
+                    decision=decision,
+                    source="engine",
+                )
+            return decision
         records = self.store.load()
         backend = self.backend
         try:

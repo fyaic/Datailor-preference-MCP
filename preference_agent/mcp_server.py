@@ -356,6 +356,20 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
             if result.get("ok") and not result.get("remaining_pending"):
                 mark_fitting_plan_reviewed(str(arguments.get("job_id") or ""), accepted=len(result.get("applied") or []))
             return _tool_response(request_id, result)
+        if name == "toggle_preferences":
+            from .config_env import update_env_file, user_env_path
+
+            enabled = bool(arguments.get("enabled", True))
+            update_env_file({"DATAILOR_ENABLED": "true" if enabled else "false"})
+            return _tool_response(
+                request_id,
+                {
+                    "ok": True,
+                    "enabled": enabled,
+                    "env_file": str(user_env_path()),
+                    "message": f"Datailor preference injection {'enabled' if enabled else 'disabled'}.",
+                },
+            )
         return _error(request_id, -32601, f"Unknown tool: {name}")
     return _error(request_id, -32601, f"Unknown method: {method}")
 
@@ -406,9 +420,12 @@ def _compact_runtime_payload(tool_name: str, data: dict[str, Any]) -> dict[str, 
 
 
 def _compact_decision_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
+    from .config_env import is_datailor_enabled
+
     payload = {
         "ok": True,
         "tool": tool,
+        "enabled": is_datailor_enabled(),
         "decision": str(data.get("decision") or ""),
         "agent_instruction": str(data.get("agent_instruction") or ""),
         "matched_count": _matched_count(data.get("matched_preferences")),
@@ -424,9 +441,12 @@ def _compact_decision_payload(data: dict[str, Any], tool: str) -> dict[str, Any]
 
 
 def _compact_prewarm_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
+    from .config_env import is_datailor_enabled
+
     payload = {
         "ok": True,
         "tool": tool,
+        "enabled": is_datailor_enabled(),
         "decision": str(data.get("decision") or ""),
         "agent_instruction": str(data.get("agent_instruction") or ""),
         "matched_count": _matched_count(data.get("matched_preferences")),
@@ -441,12 +461,15 @@ def _compact_prewarm_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
 
 
 def _compact_preference_hook_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
+    from .config_env import is_datailor_enabled
+
     decision = data.get("decision") if isinstance(data.get("decision"), dict) else {}
     prewarm = data.get("prewarm") if isinstance(data.get("prewarm"), dict) else {}
     instruction = str(decision.get("agent_instruction") or "")
     payload = {
         "ok": bool(data.get("ok", True)),
         "tool": tool,
+        "enabled": is_datailor_enabled(),
         "hook": str(data.get("hook") or ""),
         "agent": str(data.get("agent") or ""),
         "session_id": str(data.get("session_id") or ""),
@@ -1068,6 +1091,17 @@ TOOLS = [
                     "description": "Explicitly accepted change id list",
                 },
                 "fitting_dir": {"type": "string", "description": "Optional Fitting artifact directory"},
+            },
+        },
+    },
+    {
+        "name": "toggle_preferences",
+        "description": "Enable or disable Datailor preference injection. When disabled, decide and hook tools return empty instructions, but capture continues.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["enabled"],
+            "properties": {
+                "enabled": {"type": "boolean", "description": "true to enable, false to disable"},
             },
         },
     },
