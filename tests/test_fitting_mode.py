@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,7 @@ from preference_agent.fitting_trigger import (
     should_trigger_fitting,
     write_mode_settings,
 )
+from preference_agent.injection_log import read_injection_log
 from preference_agent.models import PreferenceRecord
 from preference_agent.store import MarkdownPreferenceStore
 
@@ -206,6 +208,124 @@ class FittingModeTests(unittest.TestCase):
             plan = FittingJobStore(fitting_dir).read_apply_plan(payload["job_id"])
             self.assertEqual(result.status, "reviewed")
             self.assertEqual(plan.changes[0].status, "rejected")
+
+    def test_missing_pending_plan_is_repaired_and_does_not_block_curate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store_path = root / "prefs.md"
+            settings_path = root / "settings.json"
+            fitting_dir = root / ".fitting"
+            MarkdownPreferenceStore(store_path).save(
+                [
+                    PreferenceRecord(
+                        title="English replies",
+                        applies_to="When the agent replies",
+                        preference="Use English when replying to the user by default.",
+                    )
+                ]
+            )
+            settings = default_mode_settings()
+            settings["mode"] = "curate"
+            settings["fitting"]["trigger_records"] = 1
+            settings["fitting"]["cooldown_minutes"] = 0
+            settings["fitting"]["pending_plan_job_id"] = "missing-job"
+            write_mode_settings(settings, settings_path)
+
+            with patch.dict(os.environ, _clean_env(root), clear=True):
+                decision = record_session_and_decide(
+                    store_path=store_path,
+                    changed_records=1,
+                    settings_path=settings_path,
+                    fitting_dir=fitting_dir,
+                )
+
+            self.assertTrue(decision.should_trigger)
+            self.assertEqual(decision.reason, "record_threshold")
+            repaired = read_mode_settings(settings_path)["fitting"]
+            self.assertIsNone(repaired["pending_plan_job_id"])
+            self.assertEqual(repaired["stale_pending_plan_job_id"], "missing-job")
+            events = read_injection_log(store_path)
+            self.assertTrue(
+                any(
+                    item.get("hook") == "fitting_state_repaired"
+                    and item.get("reason") == "stale_pending_plan_repaired"
+                    for item in events
+                )
+            )
+
+    def test_stale_running_job_is_repaired_and_does_not_block_curate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store_path = root / "prefs.md"
+            settings_path = root / "settings.json"
+            fitting_dir = root / ".fitting"
+            MarkdownPreferenceStore(store_path).save(
+                [
+                    PreferenceRecord(
+                        title="English replies",
+                        applies_to="When the agent replies",
+                        preference="Use English when replying to the user by default.",
+                    )
+                ]
+            )
+            settings = default_mode_settings()
+            settings["mode"] = "curate"
+            settings["fitting"]["trigger_records"] = 1
+            settings["fitting"]["cooldown_minutes"] = 0
+            write_mode_settings(settings, settings_path)
+            job_store = FittingJobStore(fitting_dir)
+            paths = job_store.paths_for_job("old-running")
+            job_store.write_status(paths, "running", {})
+            status = json.loads(paths.status_file.read_text(encoding="utf-8"))
+            status["updated_at"] = "2000-01-01T00:00:00+00:00"
+            paths.status_file.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            with patch.dict(os.environ, _clean_env(root), clear=True):
+                decision = record_session_and_decide(
+                    store_path=store_path,
+                    changed_records=1,
+                    settings_path=settings_path,
+                    fitting_dir=fitting_dir,
+                )
+
+            self.assertTrue(decision.should_trigger)
+            self.assertEqual(decision.reason, "record_threshold")
+            repaired_status = paths.status_file.read_text(encoding="utf-8")
+            self.assertIn("stale_running_repaired", repaired_status)
+            events = read_injection_log(store_path)
+            self.assertTrue(
+                any(
+                    item.get("hook") == "fitting_state_repaired"
+                    and item.get("reason") == "stale_running_job_repaired"
+                    for item in events
+                )
+            )
+
+    def test_terminal_fitting_log_contains_review_benefit_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store_path = root / "prefs.md"
+            source = root / "history.md"
+            fitting_dir = root / ".fitting"
+            source.write_text("User: From now on, reply to me in English by default.", encoding="utf-8")
+
+            payload = run_fitting_for_mode(
+                store_path=store_path,
+                mode="curate",
+                agent="codex",
+                source=source,
+                fitting_dir=fitting_dir,
+            )
+
+            self.assertEqual(payload["status"], "pending_review")
+            event = next(item for item in read_injection_log(store_path) if item.get("hook") == "fitting_pending_review")
+            extra = event["extra"]
+            self.assertEqual(extra["status"], "pending_review")
+            self.assertTrue(extra["report_file"])
+            self.assertTrue(extra["result_file"])
+            self.assertGreaterEqual(extra["pending_changes"], 1)
+            self.assertEqual(extra["applied_count"], 0)
+            self.assertIn("no_benefit_reason", extra)
 
     def test_partial_apply_keeps_plan_pending_until_remaining_changes_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

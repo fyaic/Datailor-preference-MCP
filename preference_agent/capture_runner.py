@@ -10,11 +10,11 @@ from typing import Any, Iterable
 from uuid import uuid5, NAMESPACE_URL
 
 from .backends import HeuristicBackend, PreferenceModelBackend, build_backend
+from .capture_governance import CaptureDiagnostic, classify_capture_candidate, evaluate_capture_candidate
 from .executive_summary import refresh_executive_summary
 from .models import Session, SessionMessage
 from .paths import default_candidate_dir, default_checkpoint_dir, default_store_path
 from .privacy import redact_sensitive
-from .quality import should_recall_user_text
 from .recall import MultiRouteRecallEngine, RecallCandidate, RecallConfig, RecallInput
 from .refinement import conflict_likely, refine_records
 from .store import MarkdownPreferenceStore
@@ -118,6 +118,9 @@ class CaptureCandidate:
     context_hint: str = ""
     routes: list[str] = field(default_factory=list)
     scores: dict[str, float] = field(default_factory=dict)
+    reason_codes: list[str] = field(default_factory=list)
+    signal_type: str = ""
+    diagnostic: dict[str, Any] = field(default_factory=dict)
     final_score: float = 0.0
     created_at: str = field(default_factory=now_iso)
 
@@ -143,6 +146,9 @@ class CaptureJobResult:
     agent_rule_files_seen: int = 0
     extract_errors: int = 0
     recall_errors: int = 0
+    classified_candidates: int = 0
+    filtered_candidates: int = 0
+    model_fallbacks: int = 0
     preferences_added: int = 0
     preferences_merged: int = 0
     preferences_replaced: int = 0
@@ -487,6 +493,9 @@ class CaptureRunner:
                 self._extract_batch(candidates[index : index + self.config.model_batch_size], extracted_file, result, records_store)
             return
         backend = self.backend or (build_backend("auto") if self._use_model_extract() else HeuristicBackend())
+        candidates, diagnostics = self._classify_candidates_before_extract(candidates, backend, result)
+        if not candidates:
+            return
         session = session_from_candidates(candidates, f"{result.source}#candidates")
         extracted_records = None
         last_error = ""
@@ -638,6 +647,32 @@ class CaptureRunner:
         }
         with failure_file.open("a", encoding="utf-8") as out:
             out.write(json.dumps(data, ensure_ascii=False) + "\n")
+
+    def _classify_candidates_before_extract(
+        self,
+        candidates: list[CaptureCandidate],
+        backend: PreferenceModelBackend,
+        result: CaptureJobResult,
+    ) -> tuple[list[CaptureCandidate], list[CaptureDiagnostic]]:
+        classified: list[CaptureCandidate] = []
+        diagnostics: list[CaptureDiagnostic] = []
+        for candidate in candidates:
+            diagnostic = classify_capture_candidate(
+                candidate.preference,
+                context_hint=candidate.context_hint,
+                backend=backend if self._use_model_extract() else None,
+            )
+            diagnostics.append(diagnostic)
+            candidate.reason_codes = diagnostic.reason_codes
+            candidate.signal_type = diagnostic.signal_type
+            candidate.diagnostic = diagnostic.to_dict()
+            result.classified_candidates += 1
+            if "model_failed_fallback" in diagnostic.reason_codes:
+                result.model_fallbacks += 1
+            if diagnostic.should_extract:
+                classified.append(candidate)
+        result.filtered_candidates += len(candidates) - len(classified)
+        return classified, diagnostics
 
 
 def _env_int(name: str, default: int) -> int:
@@ -791,7 +826,7 @@ def _normalize_role(role: str) -> str:
 
 
 def _should_recall(text: str) -> bool:
-    return should_recall_user_text(text)
+    return evaluate_capture_candidate(text).is_candidate
 
 
 def _candidate_from_user_message(source: str, content: str, context_hint: str = "", session_id: str = "") -> CaptureCandidate:

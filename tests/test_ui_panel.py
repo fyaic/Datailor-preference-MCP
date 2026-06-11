@@ -372,6 +372,27 @@ class UiPanelTests(unittest.TestCase):
             self.assertFalse(payload["ok"])
             self.assertIn("job not found: missing", payload["error"])
 
+    def test_ui_exposes_default_fitting_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp, patch.dict(
+            os.environ,
+            {"DATAILOR_FITTING_DIR": str(Path(temp) / ".fitting")},
+            clear=False,
+        ):
+            root = Path(temp)
+            store = root / "prefs.md"
+            fitting_dir = root / ".fitting"
+            MarkdownPreferenceStore(store).ensure()
+            manifesto = build_manifesto(store_path=store, settings_path=root / "ui" / "settings.json")
+            self.assertEqual(manifesto["fitting_source"]["default_fitting_dir"], str(fitting_dir))
+
+            info = ensure_ui_server(store_path=store, port=0, ui_dir=root / "ui")
+            with urlopen(info.url + "/api/fitting/latest", timeout=5) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["source"]["default_fitting_dir"], str(fitting_dir))
+            self.assertIsNone(payload["job"])
+
     def test_ui_correction_updates_preference_text_and_activates_it(self) -> None:
         with tempfile.TemporaryDirectory() as temp, patch.dict(
             os.environ,

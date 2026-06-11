@@ -7,13 +7,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .capture_governance import CaptureDiagnostic, evaluate_capture_candidate
 from .engine import PreferenceEngine
 from .fitting_background import maybe_run_fitting_after_capture
 from .injection_log import log_injection_event
 from .injection import prewarm_session, sync_injection_artifacts
 from .models import Evidence, PreferenceRecord, Session, SessionMessage, now_iso
 from .paths import default_hooks_dir as default_hooks_dir_path
-from .quality import should_recall_user_text
 
 
 TURN_SIGNAL_MARKERS = (
@@ -117,6 +117,7 @@ class PreferenceHookManager:
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         context = {**(context or {}), "session_id": session_id, "hook": "user_message"}
+        diagnostic = _turn_capture_diagnostic(message, "")
         decision = self.engine.decide(task=message, context=context, agent=agent, log_event=False)
         log_injection_event(
             store_path=self.engine.store.path,
@@ -128,14 +129,15 @@ class PreferenceHookManager:
             decision=decision,
             source="hook",
             reason="hook_user_message_decision",
-            extra={"preference_signal": _should_buffer_turn(message, "")},
+            extra={"capture_diagnostic": diagnostic.to_dict()},
         )
         return {
             "ok": True,
             "hook": "user_message",
             "agent": agent,
             "session_id": session_id,
-            "preference_signal": _should_buffer_turn(message, ""),
+            "preference_signal": diagnostic.is_candidate,
+            "capture_diagnostic": diagnostic.to_dict(),
             "decision": decision,
         }
 
@@ -148,7 +150,8 @@ class PreferenceHookManager:
         context: dict[str, Any] | None = None,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        if not _should_buffer_turn(user_message, assistant_response):
+        diagnostic = _turn_capture_diagnostic(user_message, assistant_response)
+        if not diagnostic.is_candidate:
             log_injection_event(
                 store_path=self.engine.store.path,
                 hook="turn_complete",
@@ -157,7 +160,8 @@ class PreferenceHookManager:
                 task=user_message,
                 context=context or {},
                 source="hook",
-                reason="no_preference_signal",
+                reason=diagnostic.primary_reason,
+                extra={"capture_diagnostic": diagnostic.to_dict()},
             )
             return {
                 "ok": True,
@@ -166,7 +170,8 @@ class PreferenceHookManager:
                 "session_id": session_id,
                 "buffered": False,
                 "preference_signal": False,
-                "reason": "no_preference_signal",
+                "reason": diagnostic.primary_reason,
+                "capture_diagnostic": diagnostic.to_dict(),
             }
         entry = TurnEntry(
             user_message=user_message,
@@ -185,6 +190,7 @@ class PreferenceHookManager:
             "session_id": session_id,
             "buffered": True,
             "preference_signal": True,
+            "capture_diagnostic": diagnostic.to_dict(),
             "buffer_size": len(turns),
             "max_turns": self.max_turns,
         }
@@ -196,7 +202,7 @@ class PreferenceHookManager:
                     changed_records=_capture_changed_count(response["flush"].get("capture")),
                     agent=agent,
                     session_id=session_id,
-                    background=True,
+                    background=False,
                 )
         log_injection_event(
             store_path=self.engine.store.path,
@@ -207,7 +213,11 @@ class PreferenceHookManager:
             context=context or {},
             source="hook",
             reason="turn_buffered",
-            extra={"buffer_size": len(turns), "max_turns": self.max_turns},
+            extra={
+                "buffer_size": len(turns),
+                "max_turns": self.max_turns,
+                "capture_diagnostic": diagnostic.to_dict(),
+            },
         )
         return response
 
@@ -222,7 +232,7 @@ class PreferenceHookManager:
     ) -> dict[str, Any]:
         signal = _behavior_signal(action, result, metadata or {})
         if not signal:
-            log_injection_event(
+            log_error = _safe_log_injection_event(
                 store_path=self.engine.store.path,
                 hook="action_executed",
                 agent=agent,
@@ -232,7 +242,7 @@ class PreferenceHookManager:
                 source="hook",
                 reason="unsupported_action_signal",
             )
-            return {
+            response = {
                 "ok": True,
                 "hook": "action_executed",
                 "agent": agent,
@@ -240,6 +250,10 @@ class PreferenceHookManager:
                 "captured": False,
                 "reason": "unsupported_action_signal",
             }
+            if log_error:
+                response["degraded"] = True
+                response["log_error"] = log_error
+            return response
         record = PreferenceRecord(
             title=signal["title"],
             summary=signal["preference"],
@@ -258,14 +272,45 @@ class PreferenceHookManager:
                 )
             ],
         )
-        capture = self.engine.capture_records(
-            [record],
-            source=f"behavior:{agent}:{session_id}:{action}",
-            dry_run=dry_run,
-        )
+        try:
+            capture = self.engine.capture_records(
+                [record],
+                source=f"behavior:{agent}:{session_id}:{action}",
+                dry_run=dry_run,
+            )
+        except Exception as exc:
+            error = _hook_error("capture_records", exc)
+            log_error = _safe_log_injection_event(
+                store_path=self.engine.store.path,
+                hook="action_executed",
+                agent=agent,
+                session_id=session_id,
+                task=action,
+                context=metadata or {},
+                source="hook",
+                reason="capture_degraded",
+                extra={"error": error, "signal": signal},
+            )
+            response = {
+                "ok": True,
+                "hook": "action_executed",
+                "agent": agent,
+                "session_id": session_id,
+                "captured": False,
+                "degraded": True,
+                "reason": "capture_degraded",
+                "error": error,
+            }
+            if log_error:
+                response["log_error"] = log_error
+            return response
+        sync_error = None
         if not dry_run:
-            sync_injection_artifacts(self.engine.store.path)
-        log_injection_event(
+            try:
+                sync_injection_artifacts(self.engine.store.path)
+            except Exception as exc:
+                sync_error = _hook_error("sync_injection_artifacts", exc)
+        log_error = _safe_log_injection_event(
             store_path=self.engine.store.path,
             hook="action_executed",
             agent=agent,
@@ -273,10 +318,10 @@ class PreferenceHookManager:
             task=action,
             context=metadata or {},
             source="hook",
-            reason="captured_action_signal",
-            extra={"capture": capture.to_dict()},
+            reason="captured_action_signal_sync_degraded" if sync_error else "captured_action_signal",
+            extra={"capture": capture.to_dict(), "sync_error": sync_error},
         )
-        return {
+        response = {
             "ok": True,
             "hook": "action_executed",
             "agent": agent,
@@ -284,6 +329,13 @@ class PreferenceHookManager:
             "captured": True,
             "capture": capture.to_dict(),
         }
+        if sync_error:
+            response["degraded"] = True
+            response["sync_error"] = sync_error
+        if log_error:
+            response["degraded"] = True
+            response["log_error"] = log_error
+        return response
 
     def on_session_end(
         self,
@@ -312,7 +364,7 @@ class PreferenceHookManager:
                 changed_records=_capture_changed_count(flush.get("capture")) + _capture_changed_count(full_capture),
                 agent=agent,
                 session_id=session_id,
-                background=True,
+                background=False,
             )
         log_injection_event(
             store_path=self.engine.store.path,
@@ -426,14 +478,26 @@ def default_hooks_dir(store_path: str | Path) -> Path:
     return default_hooks_dir_path()
 
 
-def _should_buffer_turn(user_message: str, assistant_response: str) -> bool:
+def _turn_capture_diagnostic(user_message: str, assistant_response: str) -> CaptureDiagnostic:
     user = str(user_message or "")
     assistant = str(assistant_response or "")
-    return (
-        should_recall_user_text(user)
-        or _has_any(user, TURN_SIGNAL_MARKERS)
+    diagnostic = evaluate_capture_candidate(user, assistant_response=assistant)
+    if not diagnostic.is_candidate and (
+        _has_any(user, TURN_SIGNAL_MARKERS)
         or _has_any(assistant, ASSISTANT_SIGNAL_MARKERS)
-    )
+    ):
+        diagnostic.is_candidate = True
+        diagnostic.should_extract = True
+        diagnostic.reason_codes = ["heuristic_candidate"]
+        diagnostic.signal_type = "execution_policy"
+        diagnostic.scope = "global"
+        diagnostic.durability = "likely_durable"
+        diagnostic.confidence = max(diagnostic.confidence, 0.58)
+    return diagnostic
+
+
+def _should_buffer_turn(user_message: str, assistant_response: str) -> bool:
+    return _turn_capture_diagnostic(user_message, assistant_response).is_candidate
 
 
 def _messages_from_turns(turns: list[TurnEntry]) -> list[SessionMessage]:
@@ -494,3 +558,35 @@ def _capture_changed_count(capture: dict[str, Any] | None) -> int:
     if not isinstance(capture, dict):
         return 0
     return sum(len(capture.get(key) or []) for key in ("added", "merged", "replaced", "conflicts"))
+
+
+def _safe_log_injection_event(**kwargs: Any) -> dict[str, Any] | None:
+    try:
+        log_injection_event(**kwargs)
+    except Exception as exc:
+        return _hook_error("log_injection_event", exc)
+    return None
+
+
+def _hook_error(stage: str, error: Exception) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "stage": stage,
+        "type": error.__class__.__name__,
+        "summary": _error_summary(error),
+        "message": str(error),
+    }
+    status_code = getattr(error, "status_code", None)
+    if isinstance(status_code, int):
+        data["status_code"] = status_code
+    return data
+
+
+def _error_summary(error: Exception) -> str:
+    status_code = getattr(error, "status_code", None)
+    if isinstance(status_code, int):
+        return f"{error.__class__.__name__}: HTTP {status_code}"
+    text = str(error).strip().splitlines()[0] if str(error).strip() else error.__class__.__name__
+    for marker in (" {", "\t{"):
+        if marker in text:
+            text = text.split(marker, 1)[0].strip()
+    return text[:160]

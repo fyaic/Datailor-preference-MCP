@@ -47,6 +47,9 @@ def log_injection_event(
         "injected": injected,
         "reason": _clean(reason or str(decision.get("reason") or "")),
         "escalate": bool(decision.get("escalate", False)),
+        "gate_summary": decision.get("gate_summary") if isinstance(decision.get("gate_summary"), dict) else {},
+        "fallback_applied": bool(decision.get("fallback_applied", False)),
+        "fallback_instruction": _clean(str(decision.get("fallback_instruction") or ""), limit=500),
     }
     if extra:
         item["extra"] = _safe_extra(extra)
@@ -102,6 +105,8 @@ def _matched_view(value: Any) -> list[dict[str, Any]]:
                 "confidence": str(item.get("confidence") or ""),
                 "live_confidence": item.get("live_confidence"),
                 "score": item.get("score"),
+                "category": str(item.get("category") or ""),
+                "gate_reason": str(item.get("gate_reason") or ""),
             }
         )
     return result

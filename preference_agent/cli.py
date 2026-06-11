@@ -9,7 +9,7 @@ from typing import Any
 
 from .agent_rules import install_agent_rules
 from .agent_discovery import cold_start_scan, discovery_report
-from .backends import HeuristicBackend, build_backend
+from .backends import HeuristicBackend, backend_status, build_backend
 from .capture_runner import CaptureConfig, CaptureRunner
 from .cold_start_summary import render_cold_start_progress, render_cold_start_summary, render_onboarding_summary
 from .engine import PreferenceEngine, parse_context
@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     common.add_argument("--store", default=argparse.SUPPRESS, help="Markdown preference store path")
     common.add_argument("--backend", default=argparse.SUPPRESS)
     parser.add_argument("--store", default=str(default_store_path()), help="Markdown preference store path")
-    parser.add_argument("--backend", default=os.getenv("PREFERENCE_MODEL_BACKEND", "heuristic"))
+    parser.add_argument("--backend", default=os.getenv("PREFERENCE_MODEL_BACKEND") or "auto")
     sub = parser.add_subparsers(dest="command", required=False)
 
     doctor = sub.add_parser("doctor", parents=[common], help="Check Datailor onboarding status")
@@ -449,6 +449,20 @@ def main(argv: list[str] | None = None) -> int:
             if args.json:
                 return _print(payload)
             return _print_text(_render_fitting_cli_summary(payload.get("result") or {}, quiet=args.quiet))
+        if args.review and not args.dry_run:
+            payload = run_fitting_for_mode(
+                store_path=args.store,
+                mode="curate",
+                agent=args.agent,
+                source=args.source or None,
+                instructions=args.instructions,
+                instructions_file=args.instructions_file or None,
+                fitting_dir=args.fitting_dir or None,
+                max_files=args.max_files,
+            )
+            if args.json:
+                return _print(payload)
+            return _print_text(_render_fitting_cli_summary(payload.get("result") or {}, quiet=args.quiet))
         result = run_fitting(
             store_path=args.store,
             instructions=args.instructions,
@@ -488,7 +502,11 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             return _print({"ok": False, "error": str(exc), "job_id": args.job_id})
         if result.get("ok") and not result.get("remaining_pending"):
-            mark_fitting_plan_reviewed(args.job_id, accepted=len(result.get("applied") or []))
+            mark_fitting_plan_reviewed(
+                args.job_id,
+                fitting_dir=args.fitting_dir or None,
+                accepted=len(result.get("applied") or []),
+            )
         return _print(result)
     if args.command == "ui":
         from .ui.server import run_ui_server
@@ -534,6 +552,7 @@ def main(argv: list[str] | None = None) -> int:
             "store_exists": store.exists(),
             "total_preferences": len(records),
             "active_preferences": len(active),
+            "backend": backend_status(args.backend),
         }
         if getattr(args, "json", False):
             return _print(payload)
@@ -543,6 +562,7 @@ def main(argv: list[str] | None = None) -> int:
             f"Store exists: {payload['store_exists']}",
             f"Total preferences: {payload['total_preferences']}",
             f"Active preferences: {payload['active_preferences']}",
+            f"Backend: {payload['backend']['effective']} (configured: {payload['backend']['configured']})",
         ]
         return _print_text("\n".join(lines))
     parser.error("unknown command")

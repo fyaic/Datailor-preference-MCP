@@ -18,6 +18,7 @@ from preference_agent.ui.server import build_manifesto
 from preference_agent.fitting import FittingInput, analyze_memory_rot, apply_fitting_plan, extract_insights, run_fitting
 from preference_agent.fitting_models import FittingInstruction
 from preference_agent.fitting_store import FittingJobStore
+from preference_agent.fitting_trigger import default_settings_path, read_mode_settings
 
 
 class FittingTests(unittest.TestCase):
@@ -258,8 +259,8 @@ class FittingTests(unittest.TestCase):
             )
 
             self.assertTrue(out["ok"])
-            self.assertEqual(out["status"], "completed")
-            self.assertTrue(Path(out["report_file"]).exists())
+            self.assertEqual(out["status"], "pending_review")
+            self.assertTrue(Path(out["result"]["report_file"]).exists())
 
     def test_cli_fitting_no_review_passes_false_to_runner(self) -> None:
         class FakeResult:
@@ -356,13 +357,75 @@ class FittingTests(unittest.TestCase):
                 text = started["result"]["content"][0]["text"]
                 payload = __import__("json").loads(text)
                 self.assertTrue(payload["ok"])
-                self.assertEqual(payload["status"], "completed")
+                self.assertEqual(payload["status"], "pending_review")
 
                 latest = build_manifesto(store_path=store)
                 self.assertIn("fitting", latest)
                 self.assertIsNotNone(latest["fitting"])
                 self.assertEqual(latest["fitting"]["job_id"], payload["job_id"])
                 self.assertIn("# Datailor Fitting Report", latest["fitting"]["report_markdown"])
+
+    def test_mcp_start_fitting_with_custom_dir_does_not_pollute_default_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "history.md"
+            store = root / "prefs.md"
+            default_ui = root / "default-ui"
+            custom_fitting_dir = root / "custom-fitting"
+            source.write_text("User: From now on, after changing code, run relevant tests before delivery.", encoding="utf-8")
+            engine = build_mcp_engine(store)
+
+            with patch.dict(
+                "os.environ",
+                {
+                    "PREFERENCE_UI_DIR": str(default_ui),
+                    "DATAILOR_FITTING_DIR": str(root / "default-fitting"),
+                },
+                clear=False,
+            ):
+                started = handle_request(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "start_fitting",
+                            "arguments": {
+                                "source": str(source),
+                                "fitting_dir": str(custom_fitting_dir),
+                            },
+                        },
+                    },
+                    engine,
+                )
+
+                payload = json.loads(started["result"]["content"][0]["text"])
+                self.assertEqual(payload["status"], "pending_review")
+                self.assertFalse(default_settings_path().exists())
+                changes = payload["result"]["apply_plan"]["changes"]
+                applied = handle_request(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "apply_fitting_plan",
+                            "arguments": {
+                                "job_id": payload["job_id"],
+                                "accepted_change_ids": [changes[0]["change_id"]],
+                                "fitting_dir": str(custom_fitting_dir),
+                            },
+                        },
+                    },
+                    engine,
+                )
+                applied_payload = json.loads(applied["result"]["content"][0]["text"])
+                self.assertTrue(applied_payload["ok"])
+                self.assertFalse(default_settings_path().exists())
+                custom_settings = read_mode_settings(custom_fitting_dir / "settings.json")
+
+            self.assertIn(str(custom_fitting_dir), custom_settings["fitting"]["last_result"]["report_file"])
+            self.assertIsNone(custom_settings["fitting"]["pending_plan_job_id"])
 
 
 def _run_cli(argv: list[str]) -> dict:

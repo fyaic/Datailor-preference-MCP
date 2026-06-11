@@ -148,5 +148,5 @@ def is_datailor_enabled() -> bool:
             file_values = parse_env_text(env_path.read_text(encoding="utf-8"))
         except OSError:
             pass
-    value = file_values.get("DATAILOR_ENABLED", os.getenv("DATAILOR_ENABLED", "true"))
+    value = os.getenv("DATAILOR_ENABLED", file_values.get("DATAILOR_ENABLED", "true"))
     return str(value).strip().lower() not in {"false", "0", "no", "off", "disabled"}

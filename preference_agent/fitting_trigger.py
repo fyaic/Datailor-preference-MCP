@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .fitting_store import FittingJobStore
+from .injection_log import log_injection_event
 from .models import now_iso
 from .paths import default_ui_dir
 
@@ -70,6 +71,14 @@ def default_mode_settings() -> dict[str, Any]:
 
 def default_settings_path() -> Path:
     return default_ui_dir() / "settings.json"
+
+
+def fitting_settings_path(settings_path: str | Path | None = None, fitting_dir: str | Path | None = None) -> Path | None:
+    if settings_path:
+        return Path(settings_path)
+    if fitting_dir:
+        return Path(fitting_dir) / "settings.json"
+    return None
 
 
 def read_mode_settings(path: str | Path | None = None) -> dict[str, Any]:
@@ -137,13 +146,19 @@ def record_session_and_decide(
     settings_path: str | Path | None = None,
     fitting_dir: str | Path | None = None,
 ) -> FittingTriggerDecision:
-    settings = read_mode_settings(settings_path)
+    effective_settings_path = fitting_settings_path(settings_path, fitting_dir)
+    settings = read_mode_settings(effective_settings_path)
     fitting = dict(settings.get("fitting") or {})
     fitting["records_since_last"] = int(fitting.get("records_since_last") or 0) + max(0, int(changed_records or 0))
     fitting["total_sessions_since_last"] = int(fitting.get("total_sessions_since_last") or 0) + 1
     settings["fitting"] = fitting
-    write_mode_settings(settings, settings_path)
-    return should_trigger_fitting(store_path=store_path, settings=settings, fitting_dir=fitting_dir)
+    write_mode_settings(settings, effective_settings_path)
+    return should_trigger_fitting(
+        store_path=store_path,
+        settings=settings,
+        settings_path=effective_settings_path,
+        fitting_dir=fitting_dir,
+    )
 
 
 def should_trigger_fitting(
@@ -153,7 +168,8 @@ def should_trigger_fitting(
     fitting_dir: str | Path | None = None,
     now: datetime | None = None,
 ) -> FittingTriggerDecision:
-    settings = settings or read_mode_settings(settings_path)
+    effective_settings_path = fitting_settings_path(settings_path, fitting_dir)
+    settings = settings or read_mode_settings(effective_settings_path)
     mode = normalize_mode(settings.get("mode"))
     fitting = dict(settings.get("fitting") or {})
     config = fitting_trigger_config(settings)
@@ -161,12 +177,30 @@ def should_trigger_fitting(
     auto_apply = mode == "auto"
     if not config.enabled or not _bool(fitting.get("auto_enabled"), True):
         return _decision(False, "disabled", mode, review, auto_apply, config, fitting)
-    running = _running_job(fitting_dir)
+    current = now or datetime.now(timezone.utc).astimezone()
+    running, repaired_running = _running_job(fitting_dir, now=current)
+    for item in repaired_running:
+        _log_fitting_state_repaired(
+            store_path=store_path,
+            reason="stale_running_job_repaired",
+            details=item,
+        )
     if running:
         return _decision(False, "fitting_already_running", mode, review, auto_apply, config, fitting)
     if mode == "curate" and fitting.get("pending_plan_job_id"):
-        return _decision(False, "pending_plan_requires_review", mode, review, auto_apply, config, fitting)
-    current = now or datetime.now(timezone.utc).astimezone()
+        pending_job_id = str(fitting.get("pending_plan_job_id") or "")
+        if _pending_plan_is_reviewable(pending_job_id, fitting_dir):
+            return _decision(False, "pending_plan_requires_review", mode, review, auto_apply, config, fitting)
+        fitting["stale_pending_plan_job_id"] = pending_job_id
+        fitting["pending_plan_job_id"] = None
+        fitting["stale_pending_plan_repaired_at"] = now_iso()
+        settings["fitting"] = fitting
+        write_mode_settings(settings, effective_settings_path)
+        _log_fitting_state_repaired(
+            store_path=store_path,
+            reason="stale_pending_plan_repaired",
+            details={"job_id": pending_job_id, "settings_path": str(effective_settings_path or default_settings_path())},
+        )
     last = _parse_time(str(fitting.get("last_fitting_at") or ""))
     if last and current - last < timedelta(minutes=config.cooldown_minutes):
         return _decision(False, "cooldown_active", mode, review, auto_apply, config, fitting)
@@ -225,11 +259,68 @@ def _decision(
     )
 
 
-def _running_job(fitting_dir: str | Path | None) -> str:
-    for item in FittingJobStore(fitting_dir).list_jobs(limit=5):
+def _running_job(fitting_dir: str | Path | None, now: datetime | None = None) -> tuple[str, list[dict[str, Any]]]:
+    store = FittingJobStore(fitting_dir)
+    current = now or datetime.now(timezone.utc).astimezone()
+    repaired: list[dict[str, Any]] = []
+    for item in store.list_jobs(limit=5):
         if item.get("status") == "running":
-            return str(item.get("job_id") or "")
-    return ""
+            job_id = str(item.get("job_id") or "")
+            updated_at = _parse_time(str(item.get("updated_at") or ""))
+            ttl = _env_float("PREFERENCE_FITTING_RUNNING_TTL_MINUTES", 120.0)
+            stale = updated_at is None or current - updated_at >= timedelta(minutes=max(1.0, ttl))
+            if not stale:
+                return job_id, repaired
+            paths = store.paths_for_job(job_id)
+            store.write_status(
+                paths,
+                "stale_running_repaired",
+                {
+                    "previous_status": "running",
+                    "previous_updated_at": str(item.get("updated_at") or ""),
+                    "repaired_reason": "running_job_ttl_expired",
+                    "ttl_minutes": ttl,
+                },
+            )
+            repaired.append(
+                {
+                    "job_id": job_id,
+                    "previous_updated_at": str(item.get("updated_at") or ""),
+                    "ttl_minutes": ttl,
+                    "fitting_dir": str(Path(fitting_dir) if fitting_dir else store.root),
+                }
+            )
+    return "", repaired
+
+
+def _pending_plan_is_reviewable(job_id: str, fitting_dir: str | Path | None) -> bool:
+    if not job_id:
+        return False
+    store = FittingJobStore(fitting_dir)
+    try:
+        result = store.read_result(job_id)
+        plan = store.read_apply_plan(job_id)
+    except ValueError:
+        return False
+    if result.status != "pending_review":
+        return False
+    report_file = Path(str(result.report_file or ""))
+    if not report_file.exists() or not report_file.is_file():
+        return False
+    return any(str(change.status or "").casefold() == "pending" for change in plan.changes)
+
+
+def _log_fitting_state_repaired(store_path: str | Path, reason: str, details: dict[str, Any]) -> None:
+    try:
+        log_injection_event(
+            store_path=store_path,
+            hook="fitting_state_repaired",
+            source="fitting",
+            reason=reason,
+            extra={"repair": details},
+        )
+    except Exception:
+        return
 
 
 def _store_has_records(store_path: str | Path) -> bool:

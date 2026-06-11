@@ -6,9 +6,9 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
+from .capture_governance import CaptureDiagnostic, evaluate_capture_candidate
 from .embeddings import EmbeddingBackend, build_embedding_backend, cosine_similarity
 from .models import now_iso
-from .quality import should_recall_user_text
 
 
 POSITIVE_MARKERS = (
@@ -156,21 +156,29 @@ class MultiRouteRecallEngine:
     def recall_batch(self, inputs: list[RecallInput]) -> list[RecallCandidate]:
         if not inputs:
             return []
-        eligible = [item for item in inputs if should_recall_user_text(item.content)]
+        eligible_with_diagnostics = [
+            (item, diagnostic)
+            for item in inputs
+            for diagnostic in [evaluate_capture_candidate(item.content, context_hint=item.context_hint)]
+            if diagnostic.is_candidate
+        ]
+        eligible = [item for item, _diagnostic in eligible_with_diagnostics]
         if not eligible:
             return []
         semantic_scores = self._semantic_scores(eligible)
         candidates: list[RecallCandidate] = []
-        for item, semantic_score in zip(eligible, semantic_scores):
+        for (item, diagnostic), semantic_score in zip(eligible_with_diagnostics, semantic_scores):
             self._observe_behavior(item)
             keyword_score = keyword_recall_score(item.content)
             structure_score = structure_recall_score(item.content, item.context_hint)
             behavior_score = self._behavior_score(item)
+            gate_score = diagnostic.confidence if diagnostic.should_extract else 0.0
             final_score = (
-                0.40 * semantic_score
-                + 0.30 * keyword_score
+                0.30 * semantic_score
+                + 0.25 * keyword_score
                 + 0.20 * behavior_score
                 + 0.10 * structure_score
+                + 0.15 * gate_score
             )
             routes = []
             scores = {
@@ -178,16 +186,21 @@ class MultiRouteRecallEngine:
                 "keyword": round(keyword_score, 4),
                 "behavior": round(behavior_score, 4),
                 "structure": round(structure_score, 4),
+                "candidate_gate": round(gate_score, 4),
             }
             if semantic_score >= self.config.semantic_threshold:
                 routes.append("semantic")
+            if "semantic_candidate" in diagnostic.reason_codes and "semantic" not in routes:
+                routes.append("semantic")
+            if "heuristic_candidate" in diagnostic.reason_codes:
+                routes.append("heuristic")
             if keyword_score >= self.config.keyword_threshold:
                 routes.append("keyword")
             if behavior_score > 0:
                 routes.append("behavior")
             if structure_score >= self.config.structure_threshold:
                 routes.append("structure")
-            if not self._passes(final_score, semantic_score, keyword_score, structure_score):
+            if not self._passes(final_score, semantic_score, keyword_score, structure_score, diagnostic):
                 continue
             candidates.append(self._candidate(item, routes, scores, final_score))
         return _dedupe_candidates(candidates)
@@ -262,7 +275,12 @@ class MultiRouteRecallEngine:
         semantic_score: float,
         keyword_score: float,
         structure_score: float,
+        diagnostic: CaptureDiagnostic | None = None,
     ) -> bool:
+        if diagnostic is not None and diagnostic.should_extract and (
+            "semantic_candidate" in diagnostic.reason_codes or "heuristic_candidate" in diagnostic.reason_codes
+        ):
+            return True
         return (
             final_score >= self.config.final_threshold
             or semantic_score >= self.config.semantic_threshold

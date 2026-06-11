@@ -9,9 +9,17 @@ from abc import ABC, abstractmethod
 from difflib import SequenceMatcher
 from typing import Any
 
+from .capture_governance import TAXONOMY, evaluate_capture_candidate
 from .live_confidence import LiveConfidence, live_confidence, should_inject_live_confidence
 from .models import Evidence, PreferenceRecord, Session, unique_strings
 from .quality import looks_like_one_off_task, looks_like_raw_user_fragment, should_recall_user_text
+
+
+CONTEXTUAL_RELEVANCE_MIN = 0.30
+GUARDRAIL_RELEVANCE_MIN = 0.24
+WORKFLOW_RELEVANCE_MIN = 0.24
+STRONG_SEMANTIC_RELEVANCE_MIN = 0.38
+LLM_DECISION_CANDIDATE_LIMIT = 8
 
 
 class PreferenceModelBackend(ABC):
@@ -35,16 +43,71 @@ class PreferenceModelBackend(ABC):
     ) -> dict[str, Any]:
         raise NotImplementedError
 
+    def classify_preference_candidate(self, text: str, context_hint: str = "") -> dict[str, Any]:
+        raise NotImplementedError
+
+
+class ModelRequestError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        response_body: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_body = response_body
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": self.__class__.__name__,
+            "message": str(self),
+            "status_code": self.status_code,
+            "response_body": self.response_body,
+        }
+
 
 def build_backend(name: str | None = None) -> PreferenceModelBackend:
-    backend = (name or os.getenv("PREFERENCE_MODEL_BACKEND") or "heuristic").strip().lower()
+    backend = (name or os.getenv("PREFERENCE_MODEL_BACKEND") or "auto").strip().lower()
     if backend in {"openai", "openai-compatible", "llm", "local"}:
         return OpenAICompatibleBackend()
     if backend in {"auto"}:
-        if os.getenv("PREFERENCE_MODEL_BASE_URL") or os.getenv("OPENAI_API_KEY"):
+        if _api_configuration_present():
             return OpenAICompatibleBackend()
         return HeuristicBackend()
     return HeuristicBackend()
+
+
+def backend_status(name: str | None = None) -> dict[str, Any]:
+    configured = (name or os.getenv("PREFERENCE_MODEL_BACKEND") or "auto").strip().lower() or "auto"
+    api_configured = _api_configuration_present()
+    if configured == "auto":
+        effective = "openai-compatible" if api_configured else "heuristic"
+        reason = "api_configuration_detected" if api_configured else "no_api_configuration_detected"
+    elif configured in {"openai", "openai-compatible", "llm", "local"}:
+        effective = "openai-compatible"
+        reason = "explicit_model_backend"
+    else:
+        effective = "heuristic"
+        reason = "explicit_heuristic_backend" if configured == "heuristic" else "unknown_backend_defaulted_to_heuristic"
+    return {
+        "configured": configured,
+        "effective": effective,
+        "api_configured": api_configured,
+        "model_semantics_active": effective == "openai-compatible",
+        "forced_heuristic_with_api_config": configured == "heuristic" and api_configured,
+        "reason": reason,
+    }
+
+
+def _api_configuration_present() -> bool:
+    return bool(
+        os.getenv("PREFERENCE_MODEL_BASE_URL")
+        or os.getenv("PREFERENCE_MODEL_API_KEY")
+        or os.getenv("OPENAI_BASE_URL")
+        or os.getenv("OPENAI_API_KEY")
+    )
 
 
 class HeuristicBackend(PreferenceModelBackend):
@@ -114,7 +177,12 @@ class HeuristicBackend(PreferenceModelBackend):
                     )
             if message.role == "user":
                 for sentence in _sentences(content):
-                    if not _has_any(sentence, self.preference_markers) and not should_recall_user_text(sentence):
+                    diagnostic = evaluate_capture_candidate(sentence)
+                    if (
+                        not _has_any(sentence, self.preference_markers)
+                        and not should_recall_user_text(sentence)
+                        and not diagnostic.should_extract
+                    ):
                         continue
                     generalized = _generalize_preference(sentence)
                     if generalized and len(generalized) >= 8:
@@ -132,6 +200,9 @@ class HeuristicBackend(PreferenceModelBackend):
                             )
                         )
         return _dedupe_records(candidates)
+
+    def classify_preference_candidate(self, text: str, context_hint: str = "") -> dict[str, Any]:
+        return evaluate_capture_candidate(text, context_hint=context_hint).to_dict()
 
     def merge_decision(
         self, candidate: PreferenceRecord, existing: list[PreferenceRecord]
@@ -204,12 +275,15 @@ class HeuristicBackend(PreferenceModelBackend):
                 "score": round(relevance, 3),
                 "instruction": record.preference,
                 "applies_to": record.applies_to,
+                "category": gate["family"],
+                "gate_reason": gate["reason"],
+                "gate": gate,
             }
-            for _live_score, relevance, live, record in scored[:5]
+            for _live_score, relevance, live, record, gate in scored[:5]
         ]
         if not matches:
-            return _no_preference(task)
-        conflict_group = _find_conflicts_among([record for _score, _relevance, _live, record in scored[:3]])
+            return _no_preference(task, gate_summary=_gate_summary(records, scored))
+        conflict_group = _find_conflicts_among([record for _score, _relevance, _live, record, _gate in scored[:3]])
         if conflict_group:
             return _backend_conflict_response(agent=agent, matches=matches, conflicts=conflict_group)
         combined = "; ".join(match["instruction"] for match in matches[:3])
@@ -220,6 +294,7 @@ class HeuristicBackend(PreferenceModelBackend):
             "agent_instruction": f"Apply these user preferences before replying or acting: {combined}",
             "escalate": False,
             "reason": "Found semantically relevant user preferences.",
+            "gate_summary": _gate_summary(records, scored),
         }
 
 
@@ -233,7 +308,11 @@ class OpenAICompatibleBackend(PreferenceModelBackend):
         self.api_key = os.getenv("PREFERENCE_MODEL_API_KEY") or os.getenv("OPENAI_API_KEY") or "local"
         self.model = os.getenv("PREFERENCE_MODEL_NAME") or os.getenv("OPENAI_MODEL") or "gpt-4.1-mini"
         self.timeout = float(os.getenv("PREFERENCE_MODEL_TIMEOUT", "90"))
-        self.temperature = float(os.getenv("PREFERENCE_MODEL_TEMPERATURE", "0.1"))
+        self.temperature = _env_optional_float("PREFERENCE_MODEL_TEMPERATURE", 0.1)
+        self.send_temperature = _env_bool("PREFERENCE_MODEL_SEND_TEMPERATURE", True) and self.temperature is not None
+        self.response_format = _env_response_format("PREFERENCE_MODEL_RESPONSE_FORMAT")
+        self._omit_temperature_after_rejection = False
+        self._omit_response_format_after_rejection = False
 
     def extract_preferences(self, session: Session) -> list[PreferenceRecord]:
         payload = {
@@ -267,6 +346,20 @@ class OpenAICompatibleBackend(PreferenceModelBackend):
             records.append(PreferenceRecord.from_dict(item))
         return records
 
+    def classify_preference_candidate(self, text: str, context_hint: str = "") -> dict[str, Any]:
+        result = self._chat_json(
+            system=CLASSIFY_SYSTEM_PROMPT,
+            user=json.dumps(
+                {
+                    "text": text,
+                    "context_hint": context_hint,
+                    "taxonomy": sorted(TAXONOMY),
+                },
+                ensure_ascii=False,
+            ),
+        )
+        return result if isinstance(result, dict) else {"has_preference_signal": False, "reason_codes": ["fast_gate_no_match"]}
+
     def merge_decision(
         self, candidate: PreferenceRecord, existing: list[PreferenceRecord]
     ) -> dict[str, Any]:
@@ -295,10 +388,11 @@ class OpenAICompatibleBackend(PreferenceModelBackend):
             task=task,
             context=context,
             records=records,
-            require_injection_threshold=False,
+            require_injection_threshold=True,
+            limit=LLM_DECISION_CANDIDATE_LIMIT,
         )
         if not candidates:
-            return _no_preference(task)
+            return _no_preference(task, gate_summary=_gate_summary(records, []))
         result = self._chat_json(
             system=DECIDE_SYSTEM_PROMPT,
             user=json.dumps(
@@ -315,18 +409,59 @@ class OpenAICompatibleBackend(PreferenceModelBackend):
             return _no_preference(task)
         result.setdefault("agent", agent)
         result.setdefault("escalate", result.get("decision") != "apply")
+        result.setdefault(
+            "gate_summary",
+            {
+                "active_candidates": sum(1 for record in records if str(record.status or "").casefold() == "active"),
+                "passed": len(candidates),
+                "reason": "prefiltered_candidates_for_model",
+            },
+        )
         return result
 
     def _chat_json(self, system: str, user: str) -> dict[str, Any]:
-        body = {
+        include_temperature = self.send_temperature and not self._omit_temperature_after_rejection
+        include_response_format = self.response_format is not None and not self._omit_response_format_after_rejection
+        while True:
+            try:
+                return self._chat_json_once(
+                    system=system,
+                    user=user,
+                    include_temperature=include_temperature,
+                    include_response_format=include_response_format,
+                )
+            except ModelRequestError as exc:
+                changed = False
+                if include_temperature and _looks_like_temperature_incompatibility(exc):
+                    self._omit_temperature_after_rejection = True
+                    include_temperature = False
+                    changed = True
+                if include_response_format and _looks_like_response_format_incompatibility(exc):
+                    self._omit_response_format_after_rejection = True
+                    include_response_format = False
+                    changed = True
+                if changed:
+                    continue
+                raise
+
+    def _chat_json_once(
+        self,
+        system: str,
+        user: str,
+        include_temperature: bool,
+        include_response_format: bool,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": self.temperature,
-            "response_format": {"type": "json_object"},
         }
+        if include_response_format and self.response_format is not None:
+            body["response_format"] = self.response_format
+        if include_temperature and self.temperature is not None:
+            body["temperature"] = self.temperature
         request = urllib.request.Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(body).encode("utf-8"),
@@ -340,13 +475,119 @@ class OpenAICompatibleBackend(PreferenceModelBackend):
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"model request failed: HTTP {exc.code} {body}") from exc
+            response_body = exc.read().decode("utf-8", errors="replace")
+            raise ModelRequestError(
+                f"model request failed: HTTP {exc.code} {response_body}",
+                status_code=exc.code,
+                response_body=response_body,
+            ) from exc
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"model request failed: {exc}") from exc
+            raise ModelRequestError(f"model request failed: {exc}") from exc
         content = data["choices"][0]["message"]["content"]
         return _json_from_text(content)
 
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().casefold() not in {"0", "false", "no", "off", "disabled"}
+
+
+def _env_optional_float(name: str, default: float) -> float | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip()
+    if value.casefold() in {"", "omit", "none", "null", "off", "false", "disabled"}:
+        return None
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number or one of omit/none/off") from exc
+
+
+def _env_response_format(name: str) -> dict[str, Any] | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return {"type": "json_object"}
+    value = raw.strip()
+    if value.casefold() in {"", "omit", "none", "null", "off", "false", "disabled"}:
+        return None
+    if value.casefold() in {"json", "json_object"}:
+        return {"type": "json_object"}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{name} must be omit, json_object, or a JSON object") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{name} must be omit, json_object, or a JSON object")
+    return parsed
+
+
+def _looks_like_temperature_incompatibility(error: ModelRequestError) -> bool:
+    text = " ".join([str(error), error.response_body]).casefold()
+    if "temperature" not in text:
+        return False
+    if error.status_code in {400, 422}:
+        return True
+    return _has_any(
+        text,
+        (
+            "invalid",
+            "unsupported",
+            "not support",
+            "not supported",
+            "not allowed",
+            "unknown parameter",
+            "unrecognized",
+            "extra",
+            "only",
+            "must be",
+        ),
+    )
+
+
+def _looks_like_response_format_incompatibility(error: ModelRequestError) -> bool:
+    text = " ".join([str(error), error.response_body]).casefold()
+    if not _has_any(text, ("response_format", "response format", "json_object", "json mode")):
+        return False
+    if error.status_code in {400, 422}:
+        return True
+    return _has_any(
+        text,
+        (
+            "invalid",
+            "unsupported",
+            "not support",
+            "not supported",
+            "not allowed",
+            "unknown parameter",
+            "unrecognized",
+            "extra",
+            "only",
+            "must be",
+        ),
+    )
+
+
+CLASSIFY_SYSTEM_PROMPT = """You are a semantic preference-signal classifier for a local-first personal preference agent.
+Classify whether the input text contains a durable user preference that should be inspected by extraction.
+Prefer recall over precision at this stage, but do not classify one-off tasks, paths, URLs, issue IDs, secrets, current-day instructions, or project facts as durable global preferences.
+Multilingual Chinese and English signals are first-class.
+Use this taxonomy only: communication_style, execution_policy, verification_standard, tool_preference, risk_boundary, documentation_habit, review_standard, negative_constraint, scope_exception.
+Output JSON:
+{
+  "has_preference_signal": true|false,
+  "signal_type": "taxonomy value",
+  "scope": "global|project|session|none",
+  "durability": "durable|likely_durable|temporary|one_off",
+  "confidence": 0.0,
+  "reason_codes": ["semantic_candidate|one_off_filtered|fast_gate_no_match|needs_review"],
+  "should_extract": true|false,
+  "summary": "short reason"
+}
+"""
 
 EXTRACT_SYSTEM_PROMPT = """You are a personal preference extraction engine. Extract stable, reusable user preferences that can guide future agent behavior from recalled candidates.
 Only extract preferences related to agent behavior, response style, execution habits, verification standards, escalation conditions, tool choice, language style, or information organization.
@@ -424,6 +665,8 @@ def semantic_similarity(left: str, right: str) -> float:
     right_norm = _normalize_for_similarity(right)
     if not left_norm or not right_norm:
         return 0.0
+    if left_norm == right_norm:
+        return 1.0
     seq = SequenceMatcher(None, left_norm, right_norm).ratio()
     left_grams = _char_ngrams(left_norm)
     right_grams = _char_ngrams(right_norm)
@@ -486,7 +729,11 @@ def _keyword_overlap(left: str, right: str) -> float:
     right_hits = {word for word in keywords if word in right}
     if not left_hits or not right_hits:
         return 0.0
-    return len(left_hits & right_hits) / len(left_hits | right_hits)
+    overlap = left_hits & right_hits
+    generic = {"code", "implementation", "change", "reply", "answer", "document", "local", "preference", "auto"}
+    if len(overlap) == 1 and next(iter(overlap)) in generic:
+        return 0.0
+    return len(overlap) / len(left_hits | right_hits)
 
 
 def _scope_text(record: PreferenceRecord) -> str:
@@ -518,6 +765,10 @@ def _generalize_preference(sentence: str, context: str = "") -> str:
     lowered = joined.casefold()
     if not text:
         return ""
+    if any(word in lowered for word in ("not what i meant", "review first", "patches only after", "before i approve", "after i approve")):
+        return "When the user asks for review or analysis before code changes, review first and only patch after user approval."
+    if any(word in joined for word in ("又直接改", "先分析", "不要动代码", "先别改", "不要直接改")):
+        return "Before modifying code, analyze the request and risks first; only edit after the user approves or the request clearly asks for code changes."
     if any(word in lowered for word in ("read back", "external system", "encoding", "mojibake")) and any(
         word in lowered for word in ("must", "always", "check", "confirm", "verify")
     ):
@@ -686,18 +937,17 @@ def _live_scored_records(
     context: dict[str, Any],
     records: list[PreferenceRecord],
     require_injection_threshold: bool = True,
-) -> list[tuple[float, float, LiveConfidence, PreferenceRecord]]:
+) -> list[tuple[float, float, LiveConfidence, PreferenceRecord, dict[str, Any]]]:
     query = " ".join([task, json.dumps(context, ensure_ascii=False)])
-    scored: list[tuple[float, float, LiveConfidence, PreferenceRecord]] = []
+    scored: list[tuple[float, float, LiveConfidence, PreferenceRecord, dict[str, Any]]] = []
     for record in records:
         if str(record.status or "").casefold() in {"rejected", "archived", "deleted"}:
             continue
-        if require_injection_threshold and str(record.status or "").casefold() != "active":
-            continue
         relevance = _relevance_score(query, record)
         live = live_confidence(record, relevance_score=relevance)
-        if not require_injection_threshold or should_inject_live_confidence(live):
-            scored.append((live.score, relevance, live, record))
+        gate = _injection_gate(query=query, record=record, relevance=relevance, live=live)
+        if not require_injection_threshold or gate["passed"]:
+            scored.append((live.score, relevance, live, record, gate))
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
     return scored
 
@@ -707,17 +957,21 @@ def _live_scored_preference_payloads(
     context: dict[str, Any],
     records: list[PreferenceRecord],
     require_injection_threshold: bool = True,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     payloads: list[dict[str, Any]] = []
-    for _score, relevance, live, record in _live_scored_records(
+    for _score, relevance, live, record, gate in _live_scored_records(
         task=task,
         context=context,
         records=records,
         require_injection_threshold=require_injection_threshold,
-    ):
+    )[: limit or None]:
         item = record.to_dict()
         item["relevance_score"] = round(relevance, 4)
         item["live_confidence"] = live.to_dict()
+        item["gate"] = gate
+        item["gate_reason"] = gate["reason"]
+        item["category"] = gate["family"]
         payloads.append(item)
     return payloads
 
@@ -725,13 +979,209 @@ def _live_scored_preference_payloads(
 def _relevance_score(query: str, record: PreferenceRecord) -> float:
     record_scope = _scope_text(record)
     score = semantic_similarity(query, record_scope)
-    query_category = _category(query)
-    record_category = _category(record_scope)
-    if query_category and record_category == query_category:
-        score = max(score, 0.26)
-    elif query_category and record_category and query_category != record_category:
+    query_families = _query_families(query)
+    record_family = _preference_family(record)
+    if record_family in query_families and _query_has_family_signal(query, record_family):
+        score = max(score, _family_signal_bump(record_family))
+    elif query_families and record_family and record_family not in query_families:
         score = min(score, 0.12)
     return score
+
+
+def _injection_gate(
+    query: str,
+    record: PreferenceRecord,
+    relevance: float,
+    live: LiveConfidence,
+) -> dict[str, Any]:
+    family = _preference_family(record)
+    active = str(record.status or "").casefold() == "active"
+    trigger_matched = _query_has_family_signal(query, family) or _trigger_overlap(query, record)
+    threshold = _family_relevance_threshold(family, trigger_matched)
+    live_passed = should_inject_live_confidence(live)
+    semantic_override = relevance >= STRONG_SEMANTIC_RELEVANCE_MIN and live.score >= 0.60
+    passed = active and live_passed and (relevance >= threshold or semantic_override)
+    if not active:
+        reason = f"rejected_status_{record.status}"
+    elif not live_passed:
+        reason = "rejected_live_or_relevance_threshold"
+    elif relevance < threshold and not semantic_override:
+        reason = f"rejected_{family}_context_gate"
+    elif trigger_matched:
+        reason = f"passed_{family}_explicit_trigger"
+    else:
+        reason = f"passed_{family}_semantic_relevance"
+    return {
+        "passed": passed,
+        "reason": reason,
+        "family": family,
+        "relevance_score": round(relevance, 4),
+        "live_confidence": live.score,
+        "threshold": threshold,
+        "trigger_matched": trigger_matched,
+    }
+
+
+def _gate_summary(
+    records: list[PreferenceRecord],
+    scored: list[tuple[float, float, LiveConfidence, PreferenceRecord, dict[str, Any]]],
+) -> dict[str, Any]:
+    active_count = sum(1 for record in records if str(record.status or "").casefold() == "active")
+    return {
+        "active_candidates": active_count,
+        "passed": len(scored),
+        "reason": "passed_injection_gate" if scored else "no_active_preference_passed_injection_gate",
+    }
+
+
+def _preference_family(record: PreferenceRecord) -> str:
+    text = _scope_text(record).casefold()
+    if _has_any(text, ("localhost", "dev server", "local server", "port", "process", "kill", "terminate", "external system", "read back", "encoding", "commit", "push", "delete", "destructive")):
+        return "guardrail"
+    if _has_any(text, ("test", "verify", "verification", "pytest", "regression", "code review", "format", "formatting", "linear", "issue", "complete implementation", "code changes")):
+        return "workflow"
+    if _has_any(text, ("deep discussion", "solution design", "reusable conclusions", "retrospective", "save markdown", "沉淀", "复盘", "方案", "架构")):
+        return "documentation"
+    if _has_any(text, ("wechat", "wecom", "obsidian", "markdown bold", "platform", "微信", "企业微信")):
+        return "platform"
+    if _has_any(text, ("reply", "answer", "question", "concise", "brief", "detailed", "outline", "conclusion", "language", "english", "中文")):
+        return "communication"
+    return "general"
+
+
+def _query_families(query: str) -> set[str]:
+    lowered = query.casefold()
+    families: set[str] = set()
+    if _has_any(lowered, ("localhost", "dev server", "local server", "port", "process", "kill", "terminate", "commit", "push", "delete", "destructive")) or _has_external_write_signal(lowered):
+        families.add("guardrail")
+    if _has_any(lowered, ("test", "tests", "verify", "verification", "pytest", "regression", "implement", "implementation", "implemented", "code change", "code changes", "completing code", "complete code", "code review", "format", "formatting", "linear", "issue", "测试", "验证", "验收", "评审", "实现")):
+        families.add("workflow")
+    if _has_deep_documentation_signal(lowered):
+        families.add("documentation")
+    if _has_any(lowered, ("wechat", "wecom", "obsidian", "markdown", "platform", "微信", "企业微信")):
+        families.add("platform")
+    if _has_any(lowered, ("reply", "answer", "question", "concise", "brief", "detailed", "outline", "conclusion", "explain", "font", "style", "回复", "回答", "简洁", "字体", "标题")):
+        families.add("communication")
+    return families
+
+
+def _has_external_write_signal(query: str) -> bool:
+    if _has_read_only_signal(query):
+        return False
+    has_external_target = _has_any(
+        query,
+        (
+            "external system",
+            "linear",
+            "slack",
+            "notion",
+            "github issue",
+            "issue comment",
+            "email",
+            "外部系统",
+            "linear",
+            "github",
+        ),
+    )
+    has_write_action = _has_any(
+        query,
+        (
+            "write",
+            "writing",
+            "post",
+            "comment",
+            "send",
+            "publish",
+            "update",
+            "create",
+            "save",
+            "read back",
+            "回读",
+            "写入",
+            "评论",
+            "发送",
+            "更新",
+            "创建",
+        ),
+    )
+    return (has_external_target and has_write_action) or _has_any(query, ("read back", "回读", "写入外部"))
+
+
+def _has_read_only_signal(query: str) -> bool:
+    return _has_any(
+        query,
+        (
+            "without writing",
+            "do not write",
+            "don't write",
+            "no writing",
+            "without posting",
+            "do not post",
+            "don't post",
+            "read only",
+            "read-only",
+            "locally without",
+            "summarize locally",
+            "only summarize",
+            "只读",
+            "不要写",
+            "不要发",
+        ),
+    )
+
+
+def _has_deep_documentation_signal(query: str) -> bool:
+    return _has_any(
+        query,
+        (
+            "deep discussion",
+            "solution design",
+            "reusable conclusion",
+            "retrospective",
+            "tradeoff",
+            "decision",
+            "architecture decision",
+            "discuss",
+            "analyze pros",
+            "沉淀",
+            "复盘",
+            "讨论",
+            "方案",
+            "利弊",
+            "架构怎么改",
+        ),
+    )
+
+
+def _query_has_family_signal(query: str, family: str) -> bool:
+    return family in _query_families(query)
+
+
+def _trigger_overlap(query: str, record: PreferenceRecord) -> bool:
+    query_norm = query.casefold()
+    for trigger in [*record.triggers, record.applies_to]:
+        trigger_norm = str(trigger or "").casefold()
+        if trigger_norm and semantic_similarity(query_norm, trigger_norm) >= 0.34:
+            return True
+    return False
+
+
+def _family_relevance_threshold(family: str, trigger_matched: bool) -> float:
+    if family == "guardrail":
+        return GUARDRAIL_RELEVANCE_MIN if trigger_matched else STRONG_SEMANTIC_RELEVANCE_MIN
+    if family == "workflow":
+        return WORKFLOW_RELEVANCE_MIN if trigger_matched else STRONG_SEMANTIC_RELEVANCE_MIN
+    if family in {"communication", "documentation", "platform"}:
+        return CONTEXTUAL_RELEVANCE_MIN
+    return CONTEXTUAL_RELEVANCE_MIN if trigger_matched else STRONG_SEMANTIC_RELEVANCE_MIN
+
+
+def _family_signal_bump(family: str) -> float:
+    if family in {"guardrail", "workflow"}:
+        return 0.30
+    if family in {"communication", "documentation", "platform"}:
+        return 0.32
+    return 0.30
 
 
 DETAIL_CONFLICT_WORDS = ("exhaustive", "detailed", "full explanation", "long-form", "fully explain")
@@ -795,8 +1245,8 @@ def _backend_conflict_response(
     }
 
 
-def _no_preference(task: str) -> dict[str, Any]:
-    return {
+def _no_preference(task: str, gate_summary: dict[str, Any] | None = None) -> dict[str, Any]:
+    result = {
         "decision": "no_preference",
         "matched_preferences": [],
         "agent_instruction": "",
@@ -805,6 +1255,11 @@ def _no_preference(task: str) -> dict[str, Any]:
         "cold_start_hint": "Capture the current session or import conversation history first, then incrementally update the Markdown preference store.",
         "task": task,
     }
+    if gate_summary:
+        result["gate_summary"] = gate_summary
+        if gate_summary.get("active_candidates"):
+            result["reason"] = "No active preference passed the contextual injection gate."
+    return result
 
 
 def _json_from_text(text: str) -> dict[str, Any]:

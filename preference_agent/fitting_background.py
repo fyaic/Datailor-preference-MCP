@@ -11,6 +11,7 @@ from .fitting_report import render_fitting_report
 from .fitting_store import FittingJobStore
 from .fitting_trigger import (
     FittingTriggerDecision,
+    fitting_settings_path,
     mark_fitting_reviewed,
     normalize_mode,
     record_session_and_decide,
@@ -125,7 +126,7 @@ def queue_fitting_for_mode(
             with _BACKGROUND_LOCK:
                 _BACKGROUND_RUNNING.discard(key)
 
-    thread = threading.Thread(target=_run, name="datailor-fitting", daemon=True)
+    thread = threading.Thread(target=_run, name="datailor-fitting", daemon=False)
     thread.start()
     payload = {
         "ok": True,
@@ -161,6 +162,7 @@ def run_fitting_for_mode(
     trigger: FittingTriggerDecision | None = None,
 ) -> dict[str, Any]:
     mode = normalize_mode(mode)
+    effective_settings_path = fitting_settings_path(settings_path, fitting_dir)
     review = mode == "curate"
     result = run_fitting(
         store_path=store_path,
@@ -185,7 +187,7 @@ def run_fitting_for_mode(
         if auto_apply.get("applied"):
             sync_injection_artifacts(store_path)
         _update_state_after_run(
-            settings_path=settings_path,
+            settings_path=effective_settings_path,
             result=result.to_dict(),
             pending_plan_job_id=None,
             auto_applied_count=len(auto_apply.get("applied") or []),
@@ -194,7 +196,7 @@ def run_fitting_for_mode(
     elif result.status == "completed" and mode == "curate":
         pending_plan = _mark_pending_review(result, fitting_dir=fitting_dir)
         _update_state_after_run(
-            settings_path=settings_path,
+            settings_path=effective_settings_path,
             result=pending_plan,
             pending_plan_job_id=result.job_id if _pending_changes(pending_plan) else None,
             auto_applied_count=0,
@@ -202,7 +204,7 @@ def run_fitting_for_mode(
         hook = "fitting_pending_review" if _pending_changes(pending_plan) else "fitting_completed_no_changes"
     else:
         _update_state_after_run(
-            settings_path=settings_path,
+            settings_path=effective_settings_path,
             result=result.to_dict(),
             pending_plan_job_id=None,
             auto_applied_count=0,
@@ -219,6 +221,13 @@ def run_fitting_for_mode(
         "auto_apply": auto_apply,
         "decision": trigger.to_dict() if trigger else None,
     }
+    result_data = pending_plan or result.to_dict()
+    log_extra = _terminal_log_extra(
+        mode=mode,
+        result=result_data,
+        status=str(payload.get("status") or ""),
+        auto_apply=auto_apply,
+    )
     log_injection_event(
         store_path=store_path,
         hook=hook,
@@ -226,12 +235,7 @@ def run_fitting_for_mode(
         session_id=session_id,
         source="fitting",
         reason=hook,
-        extra={
-            "mode": mode,
-            "job_id": result.job_id,
-            "auto_applied": bool(auto_apply and auto_apply.get("applied")),
-            "stats": result.stats,
-        },
+        extra=log_extra,
     )
     return payload
 
@@ -239,10 +243,16 @@ def run_fitting_for_mode(
 def mark_fitting_plan_reviewed(
     job_id: str,
     settings_path: str | Path | None = None,
+    fitting_dir: str | Path | None = None,
     accepted: int = 0,
     rejected: bool = False,
 ) -> dict[str, Any]:
-    return mark_fitting_reviewed(job_id=job_id, path=settings_path, accepted=accepted, rejected=rejected)
+    return mark_fitting_reviewed(
+        job_id=job_id,
+        path=fitting_settings_path(settings_path, fitting_dir),
+        accepted=accepted,
+        rejected=rejected,
+    )
 
 
 def _mark_pending_review(result: Any, fitting_dir: str | Path | None = None) -> dict[str, Any]:
@@ -297,6 +307,58 @@ def _pending_changes(result: dict[str, Any]) -> int:
     plan = result.get("apply_plan") if isinstance(result, dict) else {}
     changes = plan.get("changes") if isinstance(plan, dict) else []
     return len(changes) if isinstance(changes, list) else 0
+
+
+def _terminal_log_extra(
+    mode: str,
+    result: dict[str, Any],
+    status: str,
+    auto_apply: dict[str, Any] | None,
+) -> dict[str, Any]:
+    pending_changes = _pending_changes(result)
+    applied_count = len(auto_apply.get("applied") or []) if isinstance(auto_apply, dict) else _applied_changes(result)
+    return {
+        "mode": mode,
+        "job_id": str(result.get("job_id") or ""),
+        "status": status,
+        "report_file": str(result.get("report_file") or ""),
+        "result_file": str(result.get("result_file") or ""),
+        "pending_changes": pending_changes,
+        "applied_count": applied_count,
+        "no_benefit_reason": _no_benefit_reason(
+            result=result,
+            mode=mode,
+            status=status,
+            pending_changes=pending_changes,
+            applied_count=applied_count,
+        ),
+        "auto_applied": bool(auto_apply and auto_apply.get("applied")),
+        "stats": result.get("stats", {}),
+    }
+
+
+def _applied_changes(result: dict[str, Any]) -> int:
+    plan = result.get("apply_plan") if isinstance(result, dict) else {}
+    changes = plan.get("changes") if isinstance(plan, dict) else []
+    if not isinstance(changes, list):
+        return 0
+    return sum(1 for change in changes if isinstance(change, dict) and str(change.get("status") or "").casefold() == "applied")
+
+
+def _no_benefit_reason(
+    result: dict[str, Any],
+    mode: str,
+    status: str,
+    pending_changes: int,
+    applied_count: int,
+) -> str:
+    if status == "failed":
+        return "fitting_failed"
+    if pending_changes == 0 and applied_count == 0:
+        return "no_pending_changes"
+    if mode == "auto" and applied_count == 0:
+        return "no_high_confidence_auto_apply"
+    return ""
 
 
 def _log_trigger(store_path: str | Path, agent: str, session_id: str, payload: dict[str, Any]) -> None:

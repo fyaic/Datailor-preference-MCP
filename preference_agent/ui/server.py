@@ -24,6 +24,7 @@ from ..injection_log import default_injection_log, injection_log_summary, read_i
 from ..live_confidence import live_confidence
 from ..models import Evidence, PreferenceRecord, now_iso
 from ..paths import default_feedback_log as default_feedback_log_path
+from ..paths import default_fitting_dir as default_fitting_dir_path
 from ..paths import default_store_path as default_preference_store_path
 from ..paths import default_ui_dir as default_user_ui_dir
 from ..preference_actions import apply_preference_feedback
@@ -163,6 +164,10 @@ def build_manifesto(
             "summary": injection_log_summary(injection_events),
             "items": injection_events,
         },
+        "capture_diagnostics": {
+            "items": _capture_diagnostic_items(injection_events),
+        },
+        "fitting_source": _fitting_source_view(),
         "fitting": fitting_view,
     }
 
@@ -353,7 +358,7 @@ def _make_handler(config: UiConfig) -> type[BaseHTTPRequestHandler]:
                 self._json(HTTPStatus.OK, payload)
                 return
             if path == "/api/fitting/latest":
-                self._json(HTTPStatus.OK, {"ok": True, "job": _latest_fitting_view()})
+                self._json(HTTPStatus.OK, {"ok": True, "source": _fitting_source_view(), "job": _latest_fitting_view()})
                 return
             self._json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
 
@@ -521,6 +526,36 @@ def _record_view(record: PreferenceRecord, feedback_by_preference: dict[str, dic
     }
 
 
+def _capture_diagnostic_items(injection_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for event in injection_events:
+        extra = event.get("extra") if isinstance(event.get("extra"), dict) else {}
+        diagnostic = extra.get("capture_diagnostic") if isinstance(extra.get("capture_diagnostic"), dict) else {}
+        if not diagnostic:
+            continue
+        items.append(
+            {
+                "created_at": event.get("created_at") or event.get("timestamp") or "",
+                "hook": event.get("hook") or "",
+                "agent": event.get("agent") or "",
+                "session_id": event.get("session_id") or "",
+                "task": event.get("task") or "",
+                "candidate_id": diagnostic.get("candidate_id") or "",
+                "is_candidate": diagnostic.get("is_candidate"),
+                "should_extract": diagnostic.get("should_extract"),
+                "reason_codes": diagnostic.get("reason_codes") if isinstance(diagnostic.get("reason_codes"), list) else [],
+                "backend": diagnostic.get("backend") or "",
+                "signal_type": diagnostic.get("signal_type") or "",
+                "scope": diagnostic.get("scope") or "",
+                "durability": diagnostic.get("durability") or "",
+                "confidence": diagnostic.get("confidence"),
+                "summary": diagnostic.get("summary") or "",
+                "evidence_quote": diagnostic.get("evidence_quote") or "",
+            }
+        )
+    return items[:50]
+
+
 def _evidence_session_key(item: Evidence) -> str:
     return str(getattr(item, "session_id", "") or getattr(item, "source", "") or "").strip()
 
@@ -530,6 +565,7 @@ def _latest_fitting_view() -> dict[str, Any] | None:
     if not isinstance(job, dict):
         return None
     view = dict(job)
+    view["fitting_dir"] = str(default_fitting_dir_path())
     report_file = Path(str(view.get("report_file") or ""))
     view["report_markdown"] = ""
     view["report_available"] = False
@@ -552,6 +588,13 @@ def _latest_fitting_view() -> dict[str, Any] | None:
     view["pending_changes"] = len(pending) if view.get("status") == "pending_review" else 0
     view["review_state"] = "pending" if view["pending_changes"] else "none"
     return view
+
+
+def _fitting_source_view() -> dict[str, str]:
+    return {
+        "default_fitting_dir": str(default_fitting_dir_path()),
+        "env_var": "DATAILOR_FITTING_DIR",
+    }
 
 
 def _build_conflict_groups(

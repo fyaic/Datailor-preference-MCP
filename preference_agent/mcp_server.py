@@ -30,7 +30,7 @@ _AUTO_COLD_START_DONE: set[str] = set()
 
 def _engine(store_path: str | Path | None = None, backend_name: str | None = None) -> PreferenceEngine:
     store = Path(store_path) if store_path else default_store_path()
-    backend = build_backend(backend_name or os.getenv("PREFERENCE_MODEL_BACKEND", "heuristic"))
+    backend = build_backend(backend_name or os.getenv("PREFERENCE_MODEL_BACKEND", "auto"))
     fallback = HeuristicBackend() if backend.__class__.__name__ != "HeuristicBackend" else None
     return PreferenceEngine(MarkdownPreferenceStore(store), backend=backend, fallback_backend=fallback)
 
@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="datailor-mcp")
     parser.add_argument("--agent", default=os.getenv("PREFERENCE_CALLER_AGENT", ""))
     parser.add_argument("--store", default=os.getenv("PREFERENCE_STORE_PATH", ""))
-    parser.add_argument("--backend", default=os.getenv("PREFERENCE_MODEL_BACKEND", "heuristic"))
+    parser.add_argument("--backend", default=os.getenv("PREFERENCE_MODEL_BACKEND") or "auto")
     args = parser.parse_args(argv)
     if args.agent:
         os.environ["PREFERENCE_CALLER_AGENT"] = args.agent
@@ -124,7 +124,7 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
             result = get_onboarding_status(
                 store_path=engine.store.path,
                 agent_hint=str(arguments.get("agent") or os.getenv("PREFERENCE_CALLER_AGENT") or "agent"),
-                backend=os.getenv("PREFERENCE_MODEL_BACKEND", "heuristic"),
+                backend=os.getenv("PREFERENCE_MODEL_BACKEND") or "auto",
             )
             return _tool_response(request_id, result.to_dict())
         if name == "start_cold_start_capture":
@@ -133,7 +133,7 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
             result = run_onboarding(
                 store_path=engine.store.path,
                 agent_hint=str(arguments.get("agent") or os.getenv("PREFERENCE_CALLER_AGENT") or "agent"),
-                backend=os.getenv("PREFERENCE_MODEL_BACKEND", "heuristic"),
+                backend=os.getenv("PREFERENCE_MODEL_BACKEND") or "auto",
                 mode=str(arguments.get("mode") or os.getenv("PREFERENCE_AUTO_DISCOVERY_MODE", "recall-extract")),
                 dry_run=bool(arguments.get("dry_run", False)),
                 capture=True,
@@ -314,7 +314,7 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
             auto_apply_requested = bool(arguments.get("auto_apply", False))
             mode = normalize_mode(mode_argument or ("auto" if auto_apply_requested else "curate"))
             # Explicit mode wins: mode="auto" means auto-apply even if auto_apply is false.
-            if (auto_apply_requested or mode_argument) and not bool(arguments.get("dry_run", False)):
+            if not bool(arguments.get("dry_run", False)):
                 result = run_fitting_for_mode(
                     store_path=engine.store.path,
                     mode=mode,
@@ -354,7 +354,11 @@ def handle_request(request: dict[str, Any], engine: PreferenceEngine) -> dict[st
                 fitting_dir=arguments.get("fitting_dir") or None,
             )
             if result.get("ok") and not result.get("remaining_pending"):
-                mark_fitting_plan_reviewed(str(arguments.get("job_id") or ""), accepted=len(result.get("applied") or []))
+                mark_fitting_plan_reviewed(
+                    str(arguments.get("job_id") or ""),
+                    fitting_dir=arguments.get("fitting_dir") or None,
+                    accepted=len(result.get("applied") or []),
+                )
             return _tool_response(request_id, result)
         if name == "toggle_preferences":
             from .config_env import update_env_file, user_env_path
@@ -432,6 +436,7 @@ def _compact_decision_payload(data: dict[str, Any], tool: str) -> dict[str, Any]
         "matched_preferences": _compact_matches(data.get("matched_preferences")),
         "escalate": bool(data.get("escalate", False)),
         "reason": str(data.get("reason") or ""),
+        "gate_summary": _compact_gate_summary(data.get("gate_summary")),
         "checked_at": str(data.get("checked_at") or ""),
         "debug_ref": "Re-run with include_debug=true for full Datailor metadata.",
     }
@@ -451,8 +456,11 @@ def _compact_prewarm_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
         "agent_instruction": str(data.get("agent_instruction") or ""),
         "matched_count": _matched_count(data.get("matched_preferences")),
         "matched_preferences": _compact_matches(data.get("matched_preferences")),
+        "fallback_instruction": str(data.get("fallback_instruction") or ""),
+        "fallback_applied": data.get("fallback_applied"),
         "session_cache_file": str(data.get("session_cache_file") or ""),
         "fallback_file": str(data.get("fallback_file") or ""),
+        "gate_summary": _compact_gate_summary(data.get("gate_summary")),
         "checked_at": str(data.get("checked_at") or ""),
         "debug_ref": "Re-run with include_debug=true for full Datailor metadata.",
     }
@@ -480,6 +488,9 @@ def _compact_preference_hook_payload(data: dict[str, Any], tool: str) -> dict[st
         "matched_preferences": _compact_matches(decision.get("matched_preferences")),
         "escalate": bool(decision.get("escalate", False)),
         "reason": str(decision.get("reason") or ""),
+        "gate_summary": _compact_gate_summary(decision.get("gate_summary")),
+        "fallback_instruction": str(prewarm.get("fallback_instruction") or ""),
+        "fallback_applied": prewarm.get("fallback_applied"),
         "session_cache_file": str(prewarm.get("session_cache_file") or ""),
         "fallback_file": str(prewarm.get("fallback_file") or ""),
         "debug_ref": "Re-run with include_debug=true for full Datailor metadata.",
@@ -490,6 +501,7 @@ def _compact_preference_hook_payload(data: dict[str, Any], tool: str) -> dict[st
 
 
 def _compact_turn_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
+    diagnostic = data.get("capture_diagnostic") if isinstance(data.get("capture_diagnostic"), dict) else {}
     payload = {
         "ok": bool(data.get("ok", True)),
         "tool": tool,
@@ -501,6 +513,8 @@ def _compact_turn_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
         "buffer_size": data.get("buffer_size"),
         "max_turns": data.get("max_turns"),
         "reason": str(data.get("reason") or ""),
+        "capture_reason": str(diagnostic.get("primary_reason") or ""),
+        "capture_reason_codes": diagnostic.get("reason_codes") if isinstance(diagnostic.get("reason_codes"), list) else None,
         "flush": _compact_flush(data.get("flush")),
         "fitting": _compact_fitting(data.get("fitting")),
         "debug_ref": "Re-run with include_debug=true for full Datailor metadata.",
@@ -516,7 +530,11 @@ def _compact_action_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
         "agent": str(data.get("agent") or ""),
         "session_id": str(data.get("session_id") or ""),
         "captured": data.get("captured"),
+        "degraded": data.get("degraded"),
         "reason": str(data.get("reason") or ""),
+        "error": _compact_error(data.get("error")),
+        "sync_error": _compact_error(data.get("sync_error")),
+        "log_error": _compact_error(data.get("log_error")),
         "capture": _compact_capture(data.get("capture")),
         "debug_ref": "Re-run with include_debug=true for full Datailor metadata.",
     }
@@ -552,6 +570,10 @@ def _compact_matches(value: Any) -> list[dict[str, str]]:
                     "id": str(item.get("id") or ""),
                     "title": str(item.get("title") or ""),
                     "instruction": str(item.get("instruction") or ""),
+                    "score": item.get("score"),
+                    "live_confidence": item.get("live_confidence"),
+                    "category": str(item.get("category") or ""),
+                    "gate_reason": str(item.get("gate_reason") or ""),
                 }
             )
         )
@@ -611,6 +633,7 @@ def _compact_capture(value: Any) -> dict[str, Any] | None:
             "conflicts_count": _list_count(value.get("conflicts")),
             "dry_run": value.get("dry_run"),
             "filtered_candidates": value.get("filtered_candidates"),
+            "backend_errors_count": _collection_count(value.get("backend_errors")),
             "cap": _compact_cap(value.get("cap")),
         }
     )
@@ -639,6 +662,39 @@ def _compact_sync(value: Any) -> dict[str, Any] | None:
             "target_files_count": _list_count(value.get("target_files")),
         }
     )
+
+
+def _compact_error(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return _drop_empty(
+        {
+            "stage": str(value.get("stage") or ""),
+            "error_type": str(value.get("type") or ""),
+            "status_code": value.get("status_code"),
+            "summary": str(value.get("summary") or _compact_error_summary(str(value.get("message") or ""))),
+        }
+    )
+
+
+def _compact_gate_summary(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return _drop_empty(
+        {
+            "active_candidates": value.get("active_candidates"),
+            "passed": value.get("passed"),
+            "reason": str(value.get("reason") or ""),
+        }
+    )
+
+
+def _compact_error_summary(message: str) -> str:
+    text = str(message or "").strip().splitlines()[0]
+    for marker in (" {", "\t{"):
+        if marker in text:
+            text = text.split(marker, 1)[0].strip()
+    return text[:160]
 
 
 def _compact_cap(value: Any) -> dict[str, Any] | None:

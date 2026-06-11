@@ -31,6 +31,7 @@ class CaptureResult:
     executive_summary_updated: bool = False
     executive_summary_error: str = ""
     cap: dict[str, Any] = field(default_factory=dict)
+    backend_errors: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -47,6 +48,7 @@ class CaptureResult:
             "executive_summary_updated": self.executive_summary_updated,
             "executive_summary_error": self.executive_summary_error,
             "cap": self.cap,
+            "backend_errors": self.backend_errors,
         }
 
 
@@ -212,7 +214,7 @@ class PreferenceEngine:
         records: list[PreferenceRecord],
         result: CaptureResult,
     ) -> PreferenceRecord | None:
-        decision = self.backend.merge_decision(candidate, records) if records else {"action": "new"}
+        decision = self._merge_decision(candidate, records, result) if records else {"action": "new"}
         action = str(decision.get("action", "new"))
         target_id = decision.get("target_id")
         target = next((record for record in records if record.id == target_id), None)
@@ -241,6 +243,52 @@ class PreferenceEngine:
         records.append(candidate)
         result.added.append(candidate.id)
         return candidate
+
+    def _merge_decision(
+        self,
+        candidate: PreferenceRecord,
+        records: list[PreferenceRecord],
+        result: CaptureResult,
+    ) -> dict[str, Any]:
+        try:
+            return self.backend.merge_decision(candidate, records)
+        except Exception as exc:
+            result.backend_errors.append(
+                self._backend_error(
+                    stage="merge_decision",
+                    backend=self._backend_name(self.backend),
+                    error=exc,
+                )
+            )
+            if not self.fallback_backend:
+                raise
+            try:
+                decision = self.fallback_backend.merge_decision(candidate, records)
+            except Exception as fallback_exc:
+                result.backend_errors.append(
+                    self._backend_error(
+                        stage="merge_decision_fallback",
+                        backend=self._backend_name(self.fallback_backend),
+                        error=fallback_exc,
+                    )
+                )
+                raise
+            decision.setdefault("backend_error", str(exc))
+            decision.setdefault("fallback_backend", self._backend_name(self.fallback_backend))
+            return decision
+
+    @staticmethod
+    def _backend_name(backend: PreferenceModelBackend) -> str:
+        return backend.__class__.__name__
+
+    @staticmethod
+    def _backend_error(stage: str, backend: str, error: Exception) -> dict[str, str]:
+        return {
+            "stage": stage,
+            "backend": backend,
+            "type": error.__class__.__name__,
+            "message": str(error),
+        }
 
     def _apply_cap(self, records: list[PreferenceRecord], result: CaptureResult, dry_run: bool = False) -> CapResult:
         added_before_cap = list(result.added)

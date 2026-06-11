@@ -41,6 +41,13 @@ class ConfigEnvTests(unittest.TestCase):
                 self.assertEqual(os.environ["PREFERENCE_MODEL_BACKEND"], "heuristic")
                 self.assertEqual(os.environ["DATAILOR_TEST_ONLY"], "fromfile")
 
+    def test_is_datailor_enabled_real_environment_overrides_env_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "datailor.env"
+            target.write_text("DATAILOR_ENABLED=false\n", encoding="utf-8")
+            with patch.dict(os.environ, {"DATAILOR_ENV_FILE": str(target), "DATAILOR_ENABLED": "true"}, clear=False):
+                self.assertTrue(config_env.is_datailor_enabled())
+
 
 class OnboardGatingTests(unittest.TestCase):
     def test_onboard_is_bare(self) -> None:

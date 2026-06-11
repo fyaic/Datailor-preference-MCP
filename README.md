@@ -90,7 +90,7 @@ datailor onboard
 The wizard walks you through, OpenClaw-style, with arrow-key menus and a
 polished terminal UI:
 
-1. **Model backend** — local heuristic (zero config) or an OpenAI-compatible API
+1. **Model backend** — `auto` selects local heuristic with zero config, or an OpenAI-compatible API when API settings exist
    (base URL / API key / model name, with an optional live connectivity check).
    Saved to `<data_dir>\datailor.env`.
 2. **AGENTS.md rules** — preview and install the Datailor managed block.
@@ -177,7 +177,7 @@ Example output:
       "command": "datailor-mcp",
       "args": ["--agent", "codex"],
       "env": {
-        "PREFERENCE_MODEL_BACKEND": "heuristic"
+        "PREFERENCE_MODEL_BACKEND": "auto"
       }
     }
   }
@@ -338,6 +338,8 @@ Trigger conditions are controlled by environment variables:
 
 MCP also exposes `start_fitting`, `get_fitting_status`, and `apply_fitting_plan`. `start_fitting` supports `mode: "auto" | "curate"` and `auto_apply: true`. Note that `mode: "auto"` itself means auto-apply high-confidence, low-risk preferences even when `auto_apply: false` is also passed; use `mode: "curate"` or omit `mode` to generate only a review plan.
 
+The Manifesto UI reads the default Fitting directory only. If an MCP caller passes a custom `fitting_dir`, that job stays isolated to that directory and will not appear in a normal `datailor ui` session unless `DATAILOR_FITTING_DIR` points to the same directory before the UI starts. Use the default directory for jobs you want to review in the ordinary UI, or open the UI with the same `DATAILOR_FITTING_DIR` used by the MCP call.
+
 ## Real Capture
 
 Production capture should not use `recall-only` to write the store. `recall-only` is for offline tests and recall debugging. Real capture should use `recall-extract` or `semantic-extract`.
@@ -366,7 +368,15 @@ Fitting also treats cap pressure as memory rot. It proposes review-first consoli
 
 ## Model Configuration
 
-The default backend is `heuristic` and does not require an API. Use OpenAI-compatible settings for cloud or local models:
+The default backend is `auto`. In `auto` mode, Datailor uses the zero-dependency heuristic backend when no API settings are present, and switches to OpenAI-compatible model semantics when API settings are configured. Use `datailor doctor` or `datailor status --json` to inspect the configured backend, effective backend, and whether model semantics are active.
+
+To force offline behavior:
+
+```powershell
+$env:PREFERENCE_MODEL_BACKEND = "heuristic"
+```
+
+Use OpenAI-compatible settings for cloud or local models:
 
 ```powershell
 $env:PREFERENCE_MODEL_BACKEND = "openai-compatible"
@@ -383,6 +393,21 @@ $env:PREFERENCE_MODEL_BASE_URL = "https://api.moonshot.ai/v1"
 $env:PREFERENCE_MODEL_API_KEY = "replace-me"
 $env:PREFERENCE_MODEL_NAME = "Kimi-K2.5"
 ```
+
+### OpenAI-Compatible Provider Compatibility
+
+Some OpenAI-compatible providers expose the chat completions API but reject optional parameters such as `temperature` or `response_format` for specific models. Datailor sends both by default to preserve existing behavior, then automatically retries the same request without the rejected optional parameter when the provider returns an invalid or unsupported parameter error.
+
+For providers or models that are known to be strict, omit optional parameters from the first request:
+
+```powershell
+$env:PREFERENCE_MODEL_SEND_TEMPERATURE = "false"
+$env:PREFERENCE_MODEL_RESPONSE_FORMAT = "omit"
+```
+
+You can also set `PREFERENCE_MODEL_TEMPERATURE` to `omit`, `none`, or `off` to omit the field. `PREFERENCE_MODEL_RESPONSE_FORMAT` accepts `json_object` by default, `omit`, or a JSON object string for providers with custom compatibility requirements.
+
+Lifecycle hooks are best-effort: if model-backed capture still fails, hooks return degraded non-error payloads with compact diagnostics instead of surfacing the failure as a JSON-RPC `-32603` error. Compact MCP responses include short error summaries and capture reason codes only; full provider response bodies and complete capture diagnostics are available only with `include_debug=true`. The Manifesto API also exposes recent `capture_diagnostics` so users can inspect why a turn was captured, filtered, or treated as `nosignal`.
 
 Optional embeddings for semantic recall:
 
@@ -456,6 +481,10 @@ MCP exposes preference decisions, cold-start capture, feedback, hooks, conflict 
 All `decide` / hook / prewarm calls write injection logs. The Manifesto UI Injection Log shows time, agent, session, matched preferences, and the actual injected `agent_instruction`.
 
 Runtime MCP hooks return a compact visible payload by default: the decision, complete `agent_instruction`, match count, short matched preference list, and small summaries for capture/sync work. Internal metadata such as confidence factors, prewarm internals, capture details, and auto-discovery file lists remains available by calling the same tool with `include_debug=true`. Datailor does not truncate the visible `agent_instruction`; if an instruction is shown, it is the full executable instruction for that turn.
+
+Runtime decisions can also return `decision="no_preference"` with an empty `agent_instruction`. This is an intentional non-injection outcome, not an error. Compact payloads include `gate_summary` and matched preference fields such as `score`, `live_confidence`, `category`, and `gate_reason` so broad or surprising matches can be diagnosed without switching to debug mode.
+
+Prewarm still writes session cache and fallback files, but fallback rules are reported separately through `fallback_instruction`, `fallback_applied`, and `fallback_file`. Fallback guidance is static recovery guidance; it is not counted as dynamic preference injection, and no-match prewarm log events have `injected=false`.
 
 Static injection artifacts can be generated manually:
 

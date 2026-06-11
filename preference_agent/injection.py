@@ -39,6 +39,9 @@ class PrewarmResult:
     agent_instruction: str
     session_cache_file: str
     fallback_file: str
+    fallback_instruction: str = ""
+    fallback_applied: bool = False
+    gate_summary: dict[str, Any] = field(default_factory=dict)
     matched_preferences: list[dict[str, Any]] = field(default_factory=list)
     checked_at: str = field(default_factory=now_iso)
 
@@ -134,6 +137,16 @@ def prewarm_session(
         task=task,
         context=context or {},
     )
+    fallback_text = Path(sync_result.fallback_md_file).read_text(encoding="utf-8")
+    instruction = decision.get("agent_instruction") or ""
+    fallback_instruction = ""
+    if not instruction:
+        fallback_instruction = "No dynamic preference matched this session; fallback rules are available in fallback_rules.md."
+    decision = {
+        **decision,
+        "fallback_instruction": fallback_instruction,
+        "fallback_applied": bool(fallback_instruction),
+    }
     log_injection_event(
         store_path=store.path,
         hook="prewarm",
@@ -143,16 +156,13 @@ def prewarm_session(
         decision=decision,
         source="prewarm_session",
     )
-    fallback_text = Path(sync_result.fallback_md_file).read_text(encoding="utf-8")
-    instruction = decision.get("agent_instruction") or ""
-    if not instruction:
-        instruction = "No specific preference matched this session; follow the minimal fallback rules in fallback_rules.md."
     session_text = render_session_cache(
         agent=agent,
         task=task,
         context=context or {},
         instruction=instruction,
         decision=decision,
+        fallback_instruction=fallback_instruction,
         fallback_text=fallback_text,
     )
     cache_dir = out_dir / "session-cache"
@@ -165,6 +175,9 @@ def prewarm_session(
         agent_instruction=instruction,
         session_cache_file=str(cache_file),
         fallback_file=sync_result.fallback_md_file,
+        fallback_instruction=fallback_instruction,
+        fallback_applied=bool(fallback_instruction),
+        gate_summary=decision.get("gate_summary") if isinstance(decision.get("gate_summary"), dict) else {},
         matched_preferences=decision.get("matched_preferences", []),
     )
 
@@ -240,6 +253,7 @@ def render_session_cache(
     context: dict[str, Any],
     instruction: str,
     decision: dict[str, Any],
+    fallback_instruction: str,
     fallback_text: str,
 ) -> str:
     return "\n".join(
@@ -253,6 +267,10 @@ def render_session_cache(
             "## Agent Instruction",
             "",
             instruction or "No dynamic preference matched.",
+            "",
+            "## Fallback Instruction",
+            "",
+            fallback_instruction or "No fallback instruction needed because a dynamic preference matched.",
             "",
             "## Matched Preferences",
             "",

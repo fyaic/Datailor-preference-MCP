@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from .agent_rules import install_agent_rules
 from .agent_discovery import cold_start_scan, discovery_report
+from .backends import backend_status
 from .capture_runner import CaptureConfig
 from .cold_start_summary import render_onboarding_summary
 from .kimi_hooks import install_kimi_hooks
@@ -43,6 +44,7 @@ class OnboardingStatus:
     store: PreferenceStoreStatus
     agent_hint: str = ""
     backend: str = ""
+    backend_status: dict[str, Any] = field(default_factory=dict)
     python: str = ""
     platform: str = ""
     supported_sources: int = 0
@@ -79,7 +81,8 @@ def get_onboarding_status(
         state=state,
         store=store_status,
         agent_hint=agent_hint,
-        backend=backend or os.getenv("PREFERENCE_MODEL_BACKEND", "heuristic"),
+        backend=backend or os.getenv("PREFERENCE_MODEL_BACKEND") or "auto",
+        backend_status=backend_status(backend or None),
         python=sys.version.split()[0],
         platform=platform.platform(),
         supported_sources=len(sources),
@@ -151,7 +154,7 @@ def run_onboarding(
         kimi_hooks = install_kimi_hooks(
             target=kimi_hooks_target,
             agent=agent_hint or "kimi",
-            backend=backend or os.getenv("PREFERENCE_MODEL_BACKEND", "heuristic"),
+            backend=backend or os.getenv("PREFERENCE_MODEL_BACKEND") or "auto",
             store=store.path,
         ).to_dict()
     after = get_onboarding_status(store.path, agent_hint=agent_hint, backend=backend).to_dict()

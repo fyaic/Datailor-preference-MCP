@@ -77,7 +77,7 @@ class PreferenceHookTests(unittest.TestCase):
             self.assertTrue(ended["buffer_flush"]["flushed"])
             self.assertTrue(MarkdownPreferenceStore(store).load())
 
-    def test_turn_and_session_fitting_triggers_are_queued_in_background(self) -> None:
+    def test_turn_and_session_fitting_triggers_run_synchronously(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             store = root / "prefs.md"
@@ -94,11 +94,11 @@ class PreferenceHookTests(unittest.TestCase):
                     agent="codex",
                     session_id="s-background",
                 )
-                self.assertTrue(fitting.call_args.kwargs["background"])
+                self.assertFalse(fitting.call_args.kwargs["background"])
 
                 fitting.reset_mock()
                 hooks.on_session_end(agent="codex", session_id="s-background")
-                self.assertTrue(fitting.call_args.kwargs["background"])
+                self.assertFalse(fitting.call_args.kwargs["background"])
 
     def test_action_hook_creates_pending_behavior_preference(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

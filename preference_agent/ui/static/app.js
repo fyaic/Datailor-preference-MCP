@@ -140,6 +140,7 @@ const i18n = {
     },
     fitting: {
       defaultTitle: "Fitting",
+      defaultDir: "Fitting directory",
       acceptSelected: "Accept Selected",
       acceptAll: "Accept All",
       rejectAll: "Reject All",
@@ -308,6 +309,7 @@ const i18n = {
     },
     fitting: {
       defaultTitle: "Fitting",
+      defaultDir: "Fitting 目录",
       acceptSelected: "接受所选",
       acceptAll: "全部接受",
       rejectAll: "全部拒绝",
@@ -770,8 +772,12 @@ function formatCapStatus(summary) {
 
 function renderFitting(data) {
   const job = data.fitting;
+  const source = data.fitting_source || {};
+  const sourceLine = source.default_fitting_dir
+    ? `<p class="muted">${escapeHtml(t("fitting.defaultDir"))}: ${escapeHtml(source.default_fitting_dir)}</p>`
+    : "";
   if (!job) {
-    return `<p class="empty">${escapeHtml(t("empty.fitting"))}</p>`;
+    return `<p class="empty">${escapeHtml(t("empty.fitting"))}</p>${sourceLine}`;
   }
   const stats = job.stats || {};
   const instructions = job.instructions || {};
@@ -803,6 +809,7 @@ function renderFitting(data) {
         <div><dt>${escapeHtml(t("fitting.ignored"))}</dt><dd>${escapeHtml(stats.ignored_by_instruction || 0)}</dd></div>
       </dl>
       <p class="muted">${escapeHtml(job.report_file || "")}</p>
+      ${sourceLine}
       ${changeRows ? `<h3>${escapeHtml(t("fitting.proposedChanges"))}</h3><div class="fitting-change-list">${changeRows}</div>${reviewActions}` : ""}
       <h3>${escapeHtml(t("fitting.report"))}</h3>
       ${reportBlock}
