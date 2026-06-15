@@ -65,7 +65,28 @@ class IncrementalMcpTests(unittest.TestCase):
                 engine,
             )
             self.assertEqual(response["id"], 2)
-            self.assertIn("session_cache_file", response["result"]["content"][0]["text"])
+            visible_payload = json.loads(response["result"]["content"][0]["text"])
+            self.assertIn("decision", visible_payload)
+            self.assertNotIn("session_cache_file", visible_payload)
+
+            debug = handle_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "prewarm_preferences",
+                        "arguments": {
+                            "agent": "codex",
+                            "task": "Ready to reply after finishing code",
+                            "output_dir": str(root / "inject"),
+                            "include_debug": True,
+                        },
+                    },
+                },
+                engine,
+            )
+            self.assertIn("session_cache_file", debug["result"]["content"][0]["text"])
             feedback = handle_request(
                 {
                     "jsonrpc": "2.0",
@@ -227,7 +248,7 @@ class IncrementalMcpTests(unittest.TestCase):
                         "method": "tools/call",
                         "params": {
                             "name": "get_preference_decision",
-                            "arguments": {"agent": "codex", "task": "Ready to reply to the user"},
+                            "arguments": {"agent": "codex", "task": "Ready to reply to the user", "include_debug": True},
                         },
                     },
                     engine,

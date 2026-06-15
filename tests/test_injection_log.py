@@ -104,8 +104,18 @@ class InjectionLogTests(unittest.TestCase):
             compact_payload = json.loads(compact_text)
 
             self.assertEqual(compact_payload["decision"], "apply")
+            self.assertTrue(compact_payload["injected"])
             self.assertIn("After code changes", compact_payload["agent_instruction"])
             self.assertIn("matched_preferences", compact_payload)
+            self.assertEqual(set(compact_payload["matched_preferences"][0]), {"id", "title", "instruction"})
+            self.assertNotIn("ok", compact_payload)
+            self.assertNotIn("tool", compact_payload)
+            self.assertNotIn("enabled", compact_payload)
+            self.assertNotIn("hook", compact_payload)
+            self.assertNotIn("agent", compact_payload)
+            self.assertNotIn("session_id", compact_payload)
+            self.assertNotIn("debug_ref", compact_payload)
+            self.assertNotIn("gate_summary", compact_payload)
             self.assertNotIn("confidence_factors", compact_text)
             self.assertNotIn("confidence_reasons", compact_text)
             self.assertNotIn('"decision": {', compact_text)
@@ -132,6 +142,43 @@ class InjectionLogTests(unittest.TestCase):
 
             self.assertIsInstance(debug_payload["decision"], dict)
             self.assertIn("confidence_factors", debug_text)
+
+    def test_mcp_preference_hook_no_preference_visible_payload_is_minimal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            store = root / "prefs.md"
+            MarkdownPreferenceStore(store).save(
+                [
+                    PreferenceRecord(
+                        title="Tests",
+                        applies_to="After the agent changes code",
+                        preference="After code changes, run relevant tests by default.",
+                        status="active",
+                        confidence="high",
+                    )
+                ]
+            )
+            engine = PreferenceEngine(MarkdownPreferenceStore(store), backend=HeuristicBackend())
+
+            response = handle_request(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "hook_user_message",
+                        "arguments": {
+                            "agent": "codex",
+                            "session_id": "s1",
+                            "message": "What is the weather?",
+                        },
+                    },
+                },
+                engine,
+            )
+            payload = json.loads(response["result"]["content"][0]["text"])
+
+            self.assertEqual(payload, {"decision": "no_preference", "injected": False})
 
     def test_mcp_session_start_omits_full_prewarm_metadata_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -171,8 +218,9 @@ class InjectionLogTests(unittest.TestCase):
             payload = json.loads(text)
 
             self.assertEqual(payload["decision"], "apply")
-            self.assertIn("session_cache_file", payload)
-            self.assertIn("fallback_file", payload)
+            self.assertTrue(payload["injected"])
+            self.assertNotIn("session_cache_file", payload)
+            self.assertNotIn("fallback_file", payload)
             self.assertNotIn('"prewarm"', text)
             self.assertNotIn("confidence_factors", text)
 

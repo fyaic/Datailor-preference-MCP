@@ -145,8 +145,10 @@ class PreferenceEngineTests(unittest.TestCase):
                 engine,
             )
             self.assertEqual(response["id"], 1)
-            text = response["result"]["content"][0]["text"]
-            self.assertIn("matched_preferences", text)
+            payload = json.loads(response["result"]["content"][0]["text"])
+            self.assertEqual(payload["decision"], "no_preference")
+            self.assertFalse(payload["injected"])
+            self.assertNotIn("matched_preferences", payload)
 
 
 if __name__ == "__main__":

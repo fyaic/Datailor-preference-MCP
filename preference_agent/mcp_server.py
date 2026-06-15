@@ -424,79 +424,23 @@ def _compact_runtime_payload(tool_name: str, data: dict[str, Any]) -> dict[str, 
 
 
 def _compact_decision_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
-    from .config_env import is_datailor_enabled
-
-    payload = {
-        "ok": True,
-        "tool": tool,
-        "enabled": is_datailor_enabled(),
-        "decision": str(data.get("decision") or ""),
-        "agent_instruction": str(data.get("agent_instruction") or ""),
-        "matched_count": _matched_count(data.get("matched_preferences")),
-        "matched_preferences": _compact_matches(data.get("matched_preferences")),
-        "escalate": bool(data.get("escalate", False)),
-        "reason": str(data.get("reason") or ""),
-        "gate_summary": _compact_gate_summary(data.get("gate_summary")),
-        "checked_at": str(data.get("checked_at") or ""),
-        "debug_ref": "Re-run with include_debug=true for full Datailor metadata.",
-    }
+    payload = _visible_decision_payload(data)
     _add_conflict(payload, data)
-    _add_auto_discovery(payload, data)
     return _drop_empty(payload)
 
 
 def _compact_prewarm_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
-    from .config_env import is_datailor_enabled
-
-    payload = {
-        "ok": True,
-        "tool": tool,
-        "enabled": is_datailor_enabled(),
-        "decision": str(data.get("decision") or ""),
-        "agent_instruction": str(data.get("agent_instruction") or ""),
-        "matched_count": _matched_count(data.get("matched_preferences")),
-        "matched_preferences": _compact_matches(data.get("matched_preferences")),
-        "fallback_instruction": str(data.get("fallback_instruction") or ""),
-        "fallback_applied": data.get("fallback_applied"),
-        "session_cache_file": str(data.get("session_cache_file") or ""),
-        "fallback_file": str(data.get("fallback_file") or ""),
-        "gate_summary": _compact_gate_summary(data.get("gate_summary")),
-        "checked_at": str(data.get("checked_at") or ""),
-        "debug_ref": "Re-run with include_debug=true for full Datailor metadata.",
-    }
-    _add_auto_discovery(payload, data)
+    payload = _visible_decision_payload(data)
+    _add_fallback_instruction(payload, data)
     return _drop_empty(payload)
 
 
 def _compact_preference_hook_payload(data: dict[str, Any], tool: str) -> dict[str, Any]:
-    from .config_env import is_datailor_enabled
-
     decision = data.get("decision") if isinstance(data.get("decision"), dict) else {}
     prewarm = data.get("prewarm") if isinstance(data.get("prewarm"), dict) else {}
-    instruction = str(decision.get("agent_instruction") or "")
-    payload = {
-        "ok": bool(data.get("ok", True)),
-        "tool": tool,
-        "enabled": is_datailor_enabled(),
-        "hook": str(data.get("hook") or ""),
-        "agent": str(data.get("agent") or ""),
-        "session_id": str(data.get("session_id") or ""),
-        "preference_signal": data.get("preference_signal"),
-        "decision": str(decision.get("decision") or ""),
-        "agent_instruction": instruction,
-        "matched_count": _matched_count(decision.get("matched_preferences")),
-        "matched_preferences": _compact_matches(decision.get("matched_preferences")),
-        "escalate": bool(decision.get("escalate", False)),
-        "reason": str(decision.get("reason") or ""),
-        "gate_summary": _compact_gate_summary(decision.get("gate_summary")),
-        "fallback_instruction": str(prewarm.get("fallback_instruction") or ""),
-        "fallback_applied": prewarm.get("fallback_applied"),
-        "session_cache_file": str(prewarm.get("session_cache_file") or ""),
-        "fallback_file": str(prewarm.get("fallback_file") or ""),
-        "debug_ref": "Re-run with include_debug=true for full Datailor metadata.",
-    }
+    payload = _visible_decision_payload(decision)
+    _add_fallback_instruction(payload, prewarm)
     _add_conflict(payload, decision)
-    _add_auto_discovery(payload, data)
     return _drop_empty(payload)
 
 
@@ -570,14 +514,40 @@ def _compact_matches(value: Any) -> list[dict[str, str]]:
                     "id": str(item.get("id") or ""),
                     "title": str(item.get("title") or ""),
                     "instruction": str(item.get("instruction") or ""),
-                    "score": item.get("score"),
-                    "live_confidence": item.get("live_confidence"),
-                    "category": str(item.get("category") or ""),
-                    "gate_reason": str(item.get("gate_reason") or ""),
                 }
             )
         )
     return matches
+
+
+def _visible_decision_payload(decision: dict[str, Any]) -> dict[str, Any]:
+    decision_type = str(decision.get("decision") or "")
+    instruction = str(decision.get("agent_instruction") or "")
+    matches = decision.get("matched_preferences")
+    matched_count = _matched_count(matches)
+    injected = bool(instruction.strip() and decision_type == "apply")
+    payload: dict[str, Any] = {
+        "decision": decision_type,
+        "injected": injected,
+        "agent_instruction": instruction,
+    }
+    if matched_count:
+        payload["matched_count"] = matched_count
+        payload["matched_preferences"] = _compact_matches(matches)
+    if decision_type in {"disabled", "escalate", "needs_clarification"} or decision.get("conflict"):
+        payload["reason"] = str(decision.get("reason") or "")
+    if bool(decision.get("escalate", False)) and decision_type not in {"no_preference", ""}:
+        payload["escalate"] = True
+    return _drop_empty(payload)
+
+
+def _add_fallback_instruction(payload: dict[str, Any], data: dict[str, Any]) -> None:
+    instruction = str(data.get("fallback_instruction") or "")
+    if not instruction.strip():
+        return
+    payload["fallback_instruction"] = instruction
+    if data.get("fallback_applied") is not None:
+        payload["fallback_applied"] = data.get("fallback_applied")
 
 
 def _matched_count(value: Any) -> int:
