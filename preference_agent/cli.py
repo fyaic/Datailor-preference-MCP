@@ -67,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     onboard.add_argument("--agent-rules-target", default="", help="Override the AGENTS.md target path")
     onboard.add_argument("--no-kimi-hooks", action="store_true", help="Do not auto-install Kimi CLI lifecycle hooks when --agent kimi")
     onboard.add_argument("--kimi-hooks-target", default="", help="Override the Kimi config.toml path")
-    onboard.add_argument("--integrate-client", action="append", default=[], choices=["all", "codex", "claude", "kimi"], help="Explicitly install client integration during onboarding; repeatable")
+    onboard.add_argument("--integrate-client", action="append", default=[], choices=["all", "codex", "claude", "kimi", "openclaw"], help="Explicitly install client integration during onboarding; repeatable")
     onboard.add_argument("--integrate-scope", default="default", choices=["default", "user", "project", "local"], help="Scope used for --integrate-client")
     onboard.add_argument("--integrate-project-root", default="", help="Project root used for project/local integration scope")
     onboard.add_argument("--integrate-dry-run", action="store_true", help="Preview --integrate-client changes without writing client config")
@@ -110,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
     integrate_sub = integrate.add_subparsers(dest="integrate_action", required=True)
     for action_name in ["status", "install", "remove", "doctor", "export-plugin"]:
         action = integrate_sub.add_parser(action_name, help=f"{action_name} Datailor client integration")
-        action.add_argument("--client", default="all", choices=["all", "codex", "claude", "kimi"])
+        action.add_argument("--client", default="all", choices=["all", "codex", "claude", "kimi", "openclaw"])
         action.add_argument("--scope", default="default", choices=["default", "user", "project", "local"])
         action.add_argument("--project-root", default="")
         action.add_argument("--server-name", default=DEFAULT_SERVER_NAME)

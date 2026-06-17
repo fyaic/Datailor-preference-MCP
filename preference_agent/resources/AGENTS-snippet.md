@@ -6,7 +6,7 @@ Datailor is a local-first personal preference MCP. Before replying, executing ta
 
 At session start, call `hook_session_start` with the current agent, `session_id`, task summary, and context. It runs preference decisioning, session prewarm, and injection observability logging.
 
-If the preference store is empty, Datailor may automatically discover Codex / Claude / Kimi history and run a cold-start scan on the first tool call. Do not ask the user to manually provide `source_path` unless they explicitly specify a file to import.
+If the preference store is empty, Datailor may automatically discover Codex / Claude / Kimi / OpenClaw history and run a cold-start scan on the first tool call. Do not ask the user to manually provide `source_path` unless they explicitly specify a file to import.
 
 ## Before Each Reply
 

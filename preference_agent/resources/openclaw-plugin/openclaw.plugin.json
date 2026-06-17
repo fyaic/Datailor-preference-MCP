@@ -1,0 +1,10 @@
+{
+  "id": "datailor-preferences",
+  "name": "Datailor Preferences",
+  "description": "Datailor preference injection and capture hooks for OpenClaw.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "datailor-openclaw-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "description": "OpenClaw typed hook bridge for Datailor preferences.",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ],
+    "runtimeExtensions": [
+      "./index.js"
+    ]
+  },
+  "dependencies": {}
+}

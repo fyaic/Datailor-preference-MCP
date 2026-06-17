@@ -8,6 +8,8 @@
 
 Datailor is a local-first personal preference MCP for AI agents. It extracts stable, reusable user preferences from chat history and runtime hooks, stores them in the human-readable `personal-preferences.md`, and exposes them through MCP tools, a CLI, an AGENTS managed block, and a local Manifesto UI.
 
+It can run as a CLI, an MCP server for IDE coding agents such as Codex, Claude Code, and Kimi Code, and a native OpenClaw plugin with typed hooks.
+
 The V0 goal is not to remember everything. It validates a controlled workflow:
 
 - The preference store can start empty without inventing user preferences.
@@ -121,7 +123,7 @@ Cold-start scan local agent histories (any flags, `--json`, `--quiet`, or
 datailor onboard --agent codex --mode recall-extract
 ```
 
-`onboard` creates the default `personal-preferences.md`, discovers Claude / Codex / Kimi histories, orders sources by recent activity and caller agent, runs incremental scanning, and installs a global `AGENTS.md` managed block so agents know when to call Datailor hooks.
+`onboard` creates the default `personal-preferences.md`, discovers Claude / Codex / Kimi / OpenClaw histories, orders sources by recent activity and caller agent, runs incremental scanning, and installs a global `AGENTS.md` managed block so agents know when to call Datailor hooks.
 
 When `--agent kimi` is used, `onboard` also updates Kimi CLI lifecycle hooks in `~/.kimi/config.toml`: it comments out a top-level empty `hooks = []` entry and writes a Datailor-managed `[[hooks]]` block for `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`, `Stop`, and `SessionEnd`. Kimi can then call `datailor-kimi-hook` at lifecycle points. The AGENTS block remains a fallback constraint for clients that cannot inject hook output into the same model turn.
 
@@ -168,6 +170,12 @@ datailor mcp-config --agent codex
 
 `mcp-config` installs the same `AGENTS.md` managed block by default. With `--agent kimi`, it also installs Kimi CLI hooks. To keep stdout directly pasteable into MCP config files, stdout contains only MCP JSON; AGENTS/Kimi target paths, actions, and markers are printed to stderr.
 
+OpenClaw can use the same MCP JSON for manual review:
+
+```powershell
+datailor mcp-config --agent openclaw --no-agent-rules
+```
+
 Example output:
 
 ```json
@@ -201,14 +209,18 @@ datailor mcp-config --agent kimi --no-agent-rules --no-kimi-hooks
 
 Kimi hook commands observe lifecycle events and write Datailor injection logs / turn buffers. Current Kimi CLI shell hook responses only support allow/block decisions, so they cannot directly inject `agent_instruction` into the same model turn. The AGENTS managed block still tells the agent to read and apply preferences before replying.
 
+OpenClaw uses a native plugin typed-hook bridge instead of Kimi shell hooks. `datailor integrate install --client openclaw` configures MCP through `openclaw mcp set`, installs the bundled Datailor plugin template through OpenClaw's plugin registry, and enables the Datailor typed-hook plugin when needed. Keep `datailor-openclaw-hook` on PATH. The plugin registers `session_start`, `before_prompt_build`, `agent_turn_prepare`, `after_tool_call`, `agent_end`, and `session_end`; turn-complete capture uses `agent_end` only. It fails open if Datailor is unavailable.
+
 ## IDE / Client Integration
 
-`mcp-config` only prints copyable MCP JSON. To write Datailor into Codex, Claude Code, or Kimi Code client config files, use the explicit `integrate` command:
+`mcp-config` only prints copyable MCP JSON. To write Datailor into Codex, Claude Code, Kimi Code, or OpenClaw client config, use the explicit `integrate` command:
 
 ```powershell
 datailor integrate status --client all
 datailor integrate install --client codex --dry-run
 datailor integrate install --client codex
+datailor integrate install --client openclaw --dry-run
+datailor integrate install --client openclaw
 datailor integrate doctor --client all
 datailor integrate remove --client codex
 ```
@@ -219,9 +231,9 @@ datailor integrate remove --client codex
 - `install --dry-run` shows the planned change without writing config or creating backups.
 - `export-plugin --dry-run` reports the destination and whether an existing directory would be replaced, without creating directories or deleting existing output.
 - `install` backs up existing config files before writing and remains idempotent.
-- `remove` only removes the Datailor managed entry and leaves other MCP servers untouched.
+- `remove` only removes the Datailor managed entry and leaves other MCP servers untouched. For OpenClaw, it also disables the fixed `datailor-preferences` plugin so Datailor hooks are no longer mounted.
 - The default server name matches `mcp-config`: `datailor-preferences`.
-- If `--scope` is omitted, each client uses its profile default: Codex/Kimi use `user`; Claude Code uses `project`.
+- If `--scope` is omitted, each client uses its profile default: Codex/Kimi/OpenClaw use `user`; Claude Code uses `project`.
 
 Current client targets:
 
@@ -230,6 +242,7 @@ Current client targets:
 | Codex | `[mcp_servers.datailor-preferences]` in `~/.codex/config.toml` | `--scope project` writes `.codex/config.toml` in the current project; Codex only loads project config for trusted projects. |
 | Claude Code | `.mcp.json` in the current project | `user` / `local` scope writes `~/.claude.json`; project scope is easier to review. |
 | Kimi Code | `mcpServers.datailor-preferences` in `~/.kimi/mcp.json` | Kimi CLI stores MCP config at user scope; project scope maps to user config and emits a warning. |
+| OpenClaw | `openclaw mcp set datailor-preferences <json>` plus `~/.openclaw/plugins/datailor-preferences` | Datailor uses the OpenClaw CLI instead of editing private config files directly; it writes, registers, and enables the hook plugin template. |
 
 When `--store` is explicit, the written MCP environment includes `PREFERENCE_STORE_PATH`:
 
@@ -242,6 +255,7 @@ datailor --store "D:\Datailor\personal-preferences.md" integrate install --clien
 ```powershell
 datailor onboard --agent codex --integrate-client codex
 datailor onboard --agent claude --integrate-client claude --integrate-scope project
+datailor onboard --agent openclaw --integrate-client openclaw
 ```
 
 `doctor`, `onboard`, and `cold-start-scan` next steps point users to `datailor integrate status --client all` and `datailor integrate install --client all --dry-run` so IDE/client integration is discoverable.
@@ -252,9 +266,10 @@ Plugin templates can be exported to a local directory and then installed or insp
 datailor integrate export-plugin --client codex --output .\datailor-plugins
 datailor integrate export-plugin --client claude --output .\datailor-plugins
 datailor integrate export-plugin --client kimi --output .\datailor-plugins
+datailor integrate export-plugin --client openclaw --output .\datailor-plugins
 ```
 
-Exported templates stay short: Datailor MCP config, common CLI entry points, and preference hook rules. Codex and Claude Code templates include `.mcp.json` and a skill. The Kimi template includes `plugin.json`, `SKILL.md`, and a small command wrapper. The wrapper command uses the current Python interpreter and an absolute script path, then calls Datailor through `python -m preference_agent.cli`; it does not depend on Kimi's working directory or on `datailor` being on PATH. Actual plugin loading behavior still depends on each client's current official plugin flow.
+Exported templates stay short: Datailor MCP config, common CLI entry points, and preference hook rules. Codex and Claude Code templates include `.mcp.json` and a skill. The Kimi template includes `plugin.json`, `SKILL.md`, and a small command wrapper. The OpenClaw template includes `package.json`, `index.js`, and a README for typed-hook forwarding; `integrate install --client openclaw` writes the same template to the default OpenClaw plugin path. Actual plugin loading behavior still depends on each client's current official plugin flow.
 
 ## Cold-Start Scan
 
@@ -353,6 +368,8 @@ datailor capture-job --source "C:\path\to\history.jsonl" --max-minutes 10
 Long-running captures can be repeated safely. The runner uses `.capture-state\*.checkpoint.json` under the user data directory and only advances checkpoints after candidates are refined and written, so interrupted runs do not silently skip data.
 
 Kimi Code `user-history` JSONL often contains only a `content` field and no `role` field. Datailor treats content-only JSONL as user input.
+
+OpenClaw session discovery scans `~/.openclaw/agents/*/sessions/*.jsonl` and skips `*.trajectory.jsonl` files in the first adapter version. For OpenClaw `type=message` records, Datailor extracts only `message.role=user` text parts from `message.content`; assistant, system, tool result, image, and trajectory events do not become user preferences.
 
 ## Preference Store Capacity
 

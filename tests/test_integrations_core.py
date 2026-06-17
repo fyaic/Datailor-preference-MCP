@@ -14,9 +14,232 @@ from unittest.mock import patch
 
 from preference_agent.cli import main as cli_main
 from preference_agent.integrations import run_integrations
+from preference_agent.integrations.registry import expand_clients
 
 
 class IntegrationCoreTests(unittest.TestCase):
+    def test_openclaw_is_explicit_and_not_in_default_all_clients(self) -> None:
+        self.assertNotIn("openclaw", expand_clients("all"))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.dict(os.environ, {"DATAILOR_INTEGRATION_HOME": str(root)}, clear=False):
+                status = _run_cli(["integrate", "status", "--client", "all", "--json"])
+
+        self.assertTrue(status["ok"])
+        self.assertEqual(len(status["results"]), 3)
+        self.assertNotIn("openclaw", {item["client"] for item in status["results"]})
+
+    def test_openclaw_install_registers_plugin_and_is_idempotent(self) -> None:
+        state = {"plugin": False, "enabled": False, "hooks": False, "mcp": False}
+
+        def fake_run(args, **kwargs):
+            if args[1:3] == ["mcp", "list"]:
+                stdout = "datailor-preferences\n" if state["mcp"] else ""
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+            if args[1:4] == ["plugins", "list", "--json"]:
+                plugins = [_openclaw_plugin_list_entry(state)] if state["plugin"] else []
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps({"plugins": plugins}), stderr="")
+            if args[1:4] == ["plugins", "inspect", "datailor-preferences"]:
+                hooks = _openclaw_hook_payload() if state["hooks"] and state["enabled"] else {"typedHooks": []}
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps(hooks), stderr="")
+            if args[1:3] == ["plugins", "install"]:
+                state["plugin"] = True
+                state["enabled"] = True
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+            if args[1:3] == ["plugins", "enable"]:
+                state["enabled"] = True
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+            if args[1:3] == ["config", "patch"]:
+                self.assertIn("allowConversationAccess", kwargs["input"])
+                state["hooks"] = True
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+            if args[1:3] == ["mcp", "set"]:
+                state["mcp"] = True
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+            raise AssertionError(f"unexpected command: {args}")
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            command = str(root / "openclaw.CMD")
+            with patch.dict(os.environ, {"DATAILOR_INTEGRATION_HOME": str(root)}, clear=False):
+                with patch("preference_agent.integrations.installer.which", return_value=command):
+                    with patch("preference_agent.integrations.installer.subprocess.run", side_effect=fake_run) as run:
+                        first = run_integrations(action="install", client="openclaw", scope="user")
+                        second = run_integrations(action="install", client="openclaw", scope="user")
+            plugin_path = Path(first["results"][0]["details"]["plugin_path"])
+            self.assertTrue((plugin_path / "index.js").exists())
+            self.assertTrue((plugin_path / "openclaw.plugin.json").exists())
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(first["results"][0]["changed"])
+        self.assertTrue(second["ok"])
+        self.assertFalse(second["results"][0]["changed"])
+        calls = [call.args[0] for call in run.call_args_list]
+        self.assertIn([command, "plugins", "install", str(plugin_path), "--link"], calls)
+        mcp_set = [args for args in calls if args[1:3] == ["mcp", "set"]][0]
+        self.assertEqual(mcp_set[:4], [command, "mcp", "set", "datailor-preferences"])
+        self.assertIn('"--agent"', mcp_set[4])
+        self.assertIn('"openclaw"', mcp_set[4])
+
+    def test_openclaw_custom_server_name_keeps_fixed_plugin_id(self) -> None:
+        state = {"plugin": False, "enabled": False, "hooks": False, "mcp": False}
+        seen_inspect_ids: list[str] = []
+        seen_patch = ""
+
+        def fake_run(args, **kwargs):
+            nonlocal seen_patch
+            if args[1:3] == ["mcp", "list"]:
+                stdout = "datailor-review-test\n" if state["mcp"] else ""
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+            if args[1:4] == ["plugins", "list", "--json"]:
+                plugins = [_openclaw_plugin_list_entry(state)] if state["plugin"] else []
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps({"plugins": plugins}), stderr="")
+            if args[1:3] == ["plugins", "inspect"]:
+                seen_inspect_ids.append(args[3])
+                hooks = _openclaw_hook_payload() if state["hooks"] and state["enabled"] else {"typedHooks": []}
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps(hooks), stderr="")
+            if args[1:3] == ["plugins", "install"]:
+                state["plugin"] = True
+                state["enabled"] = True
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+            if args[1:3] == ["config", "patch"]:
+                seen_patch = kwargs["input"]
+                state["hooks"] = True
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+            if args[1:3] == ["mcp", "set"]:
+                self.assertEqual(args[3], "datailor-review-test")
+                state["mcp"] = True
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+            raise AssertionError(f"unexpected command: {args}")
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            command = str(root / "openclaw.CMD")
+            with patch.dict(os.environ, {"DATAILOR_INTEGRATION_HOME": str(root)}, clear=False):
+                with patch("preference_agent.integrations.installer.which", return_value=command):
+                    with patch("preference_agent.integrations.installer.subprocess.run", side_effect=fake_run):
+                        result = run_integrations(
+                            action="install",
+                            client="openclaw",
+                            scope="user",
+                            server_name="datailor-review-test",
+                        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["results"][0]["details"]["server_name"], "datailor-review-test")
+        self.assertEqual(result["results"][0]["details"]["plugin_id"], "datailor-preferences")
+        self.assertIn("datailor-preferences", seen_inspect_ids)
+        self.assertNotIn("datailor-review-test", seen_inspect_ids)
+        self.assertIn('"datailor-preferences"', seen_patch)
+        self.assertNotIn('"datailor-review-test"', seen_patch)
+
+    def test_openclaw_remove_disables_plugin_hooks_and_is_idempotent(self) -> None:
+        state = {"plugin": True, "enabled": True, "hooks": True, "mcp": True}
+
+        def fake_run(args, **kwargs):
+            if args[1:3] == ["mcp", "list"]:
+                stdout = "datailor-preferences\n" if state["mcp"] else ""
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+            if args[1:4] == ["plugins", "list", "--json"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps({"plugins": [_openclaw_plugin_list_entry(state)]}), stderr="")
+            if args[1:4] == ["plugins", "inspect", "datailor-preferences"]:
+                hooks = _openclaw_hook_payload() if state["hooks"] and state["enabled"] else {"typedHooks": []}
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps(hooks), stderr="")
+            if args[1:3] == ["mcp", "unset"]:
+                state["mcp"] = False
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+            if args[1:3] == ["plugins", "disable"]:
+                self.assertEqual(args[3], "datailor-preferences")
+                state["enabled"] = False
+                state["hooks"] = False
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+            raise AssertionError(f"unexpected command: {args}")
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            command = str(root / "openclaw.CMD")
+            with patch.dict(os.environ, {"DATAILOR_INTEGRATION_HOME": str(root)}, clear=False):
+                with patch("preference_agent.integrations.installer.which", return_value=command):
+                    with patch("preference_agent.integrations.installer.subprocess.run", side_effect=fake_run) as run:
+                        first = run_integrations(action="remove", client="openclaw", scope="user")
+                        second = run_integrations(action="remove", client="openclaw", scope="user")
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(first["results"][0]["changed"])
+        self.assertEqual(first["results"][0]["state"], "not_configured")
+        self.assertFalse(first["results"][0]["details"]["plugin_enabled"])
+        self.assertFalse(first["results"][0]["details"]["hooks_ready"])
+        self.assertTrue(second["ok"])
+        self.assertFalse(second["results"][0]["changed"])
+        calls = [call.args[0] for call in run.call_args_list]
+        self.assertIn([command, "plugins", "disable", "datailor-preferences"], calls)
+
+    def test_openclaw_install_returns_structured_failure_if_cli_launch_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            command = str(root / "openclaw.CMD")
+            with patch.dict(os.environ, {"DATAILOR_INTEGRATION_HOME": str(root)}, clear=False):
+                with patch("preference_agent.integrations.installer.which", return_value=command):
+                    with patch("preference_agent.integrations.installer.subprocess.run", side_effect=FileNotFoundError("missing")):
+                        result = run_integrations(action="install", client="openclaw", scope="user")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["results"][0]["state"], "error")
+        self.assertIn("failed to launch", result["results"][0]["warnings"][0])
+
+    def test_openclaw_doctor_requires_hook_plugin_template(self) -> None:
+        def fake_run(args, **kwargs):
+            if args[1:3] == ["mcp", "list"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="datailor-preferences\n", stderr="")
+            if args[1:4] == ["plugins", "list", "--json"]:
+                return subprocess.CompletedProcess(
+                    args=args,
+                    returncode=0,
+                    stdout=json.dumps({"plugins": [_openclaw_plugin_list_entry({"plugin": True, "enabled": True, "hooks": True, "mcp": True})]}),
+                    stderr="",
+                )
+            if args[1:4] == ["plugins", "inspect", "datailor-preferences"]:
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout=json.dumps(_openclaw_hook_payload()), stderr="")
+            raise AssertionError(f"unexpected command: {args}")
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            command = str(root / "openclaw.CMD")
+            with patch.dict(os.environ, {"DATAILOR_INTEGRATION_HOME": str(root)}, clear=False):
+                with patch("preference_agent.integrations.installer.which", return_value=command):
+                    with patch("preference_agent.integrations.installer.subprocess.run", side_effect=fake_run):
+                        result = run_integrations(action="doctor", client="openclaw", scope="user")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["results"][0]["state"], "configured")
+        self.assertIn("plugin files are not installed", result["results"][0]["warnings"][0])
+
+    def test_openclaw_export_plugin_creates_template(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            out = _run_cli(["integrate", "export-plugin", "--client", "openclaw", "--output", str(root)])
+            destination = Path(out["results"][0]["details"]["destination"])
+
+            self.assertTrue((destination / "package.json").exists())
+            self.assertTrue((destination / "index.js").exists())
+            self.assertTrue((destination / "README.md").exists())
+            self.assertTrue((destination / "openclaw.plugin.json").exists())
+            package = json.loads((destination / "package.json").read_text(encoding="utf-8"))
+            self.assertIn("./index.js", package["openclaw"]["extensions"])
+            self.assertIn("./index.js", package["openclaw"]["runtimeExtensions"])
+            manifest = json.loads((destination / "openclaw.plugin.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["id"], "datailor-preferences")
+            plugin_text = (destination / "index.js").read_text(encoding="utf-8")
+            self.assertIn("before_prompt_build", plugin_text)
+            self.assertIn('api.on("agent_end"', plugin_text)
+            self.assertNotIn('api.on("llm_output"', plugin_text)
+            self.assertIn("datailor-openclaw-hook", plugin_text)
+            self.assertIn("openclaw/plugin-sdk/plugin-entry", plugin_text)
+            self.assertIn("openclaw/plugin-sdk/process-runtime", plugin_text)
+            self.assertNotIn("child_process", plugin_text)
+            self.assertIn("(payload, context)", plugin_text)
+            self.assertIn("context", plugin_text)
+
     def test_codex_install_is_idempotent_and_remove_preserves_existing_toml(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -222,6 +445,27 @@ def _run_cli(argv: list[str]) -> dict[str, object]:
     if code != 0:
         raise AssertionError(f"CLI exited with {code}")
     return json.loads(buffer.getvalue())
+
+
+def _openclaw_hook_payload() -> dict[str, object]:
+    return {
+        "typedHooks": [
+            {"name": "session_start"},
+            {"name": "before_prompt_build"},
+            {"name": "agent_turn_prepare"},
+            {"name": "after_tool_call"},
+            {"name": "agent_end"},
+            {"name": "session_end"},
+        ]
+    }
+
+
+def _openclaw_plugin_list_entry(state: dict[str, bool]) -> dict[str, object]:
+    return {
+        "id": "datailor-preferences",
+        "enabled": state["enabled"],
+        "status": "loaded" if state["enabled"] else "disabled",
+    }
 
 
 if __name__ == "__main__":

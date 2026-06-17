@@ -4,6 +4,7 @@ import os
 import platform
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from glob import glob
 from pathlib import Path
 from typing import Any, Callable
 
@@ -120,6 +121,20 @@ AGENT_HISTORY_SPECS = [
             "windows": ["~/.kimi/user-history/*.jsonl"],
             "darwin": ["~/.kimi/user-history/*.jsonl"],
             "linux": ["~/.kimi/user-history/*.jsonl"],
+        },
+    ),
+    AgentHistorySpec(
+        name="openclaw",
+        display_name="OpenClaw",
+        root_templates={
+            "windows": "~/.openclaw",
+            "darwin": "~/.openclaw",
+            "linux": "~/.openclaw",
+        },
+        history_templates={
+            "windows": ["~/.openclaw/agents/*/sessions/*.jsonl"],
+            "darwin": ["~/.openclaw/agents/*/sessions/*.jsonl"],
+            "linux": ["~/.openclaw/agents/*/sessions/*.jsonl"],
         },
     ),
     AgentHistorySpec(
@@ -349,9 +364,11 @@ def _history_sources(
     seen: set[Path] = set()
     for template in history_templates:
         pattern = _expand_pattern(template, home=home)
-        matches = sorted(pattern.parent.glob(pattern.name)) if _has_glob(pattern) else [pattern]
+        matches = [Path(item) for item in sorted(glob(str(pattern)))] if _has_glob(pattern) else [pattern]
         for path in matches:
             if not path.exists() or not path.is_file():
+                continue
+            if spec.name == "openclaw" and path.name.endswith(".trajectory.jsonl"):
                 continue
             resolved = path.resolve()
             if resolved in seen:

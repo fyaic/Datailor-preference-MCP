@@ -8,10 +8,10 @@ from typing import Any, Literal
 DEFAULT_SERVER_NAME = "datailor-preferences"
 DEFAULT_MCP_COMMAND = "datailor-mcp"
 
-ClientName = Literal["codex", "claude", "kimi"]
+ClientName = Literal["codex", "claude", "kimi", "openclaw"]
 ScopeName = Literal["user", "project", "local"]
 ActionName = Literal["status", "install", "remove", "doctor", "export-plugin"]
-ConfigKind = Literal["json", "toml", "claude-json", "plugin"]
+ConfigKind = Literal["json", "toml", "claude-json", "plugin", "cli"]
 
 
 @dataclass(frozen=True)

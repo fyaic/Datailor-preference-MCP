@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from shutil import which
@@ -10,6 +12,17 @@ from .models import DEFAULT_MCP_COMMAND, DEFAULT_SERVER_NAME, ClientProfile, Int
 from .paths import project_root_path, target_for_profile
 from .plugins import export_plugin_template
 from .registry import expand_clients, get_profile
+
+
+OPENCLAW_PLUGIN_ID = "datailor-preferences"
+OPENCLAW_EXPECTED_HOOKS = {
+    "session_start",
+    "before_prompt_build",
+    "agent_turn_prepare",
+    "after_tool_call",
+    "agent_end",
+    "session_end",
+}
 
 
 def run_integrations(
@@ -72,6 +85,18 @@ def run_integration(
     warnings = list(target.warnings)
     server = _server_config(profile.agent_arg, mcp_command, backend, store)
     try:
+        if profile.name == "openclaw":
+            return _run_openclaw_cli_integration(
+                profile,
+                action=action,
+                scope=scope,
+                dry_run=dry_run,
+                target=target,
+                server_name=server_name,
+                server=server,
+                warnings=warnings,
+                mcp_command=mcp_command,
+            )
         if action == "status":
             state = _state(profile, target.config_path, server_name, scope, project_root)
             return _result(True, profile, action, scope, False, dry_run, target, "", state, warnings)
@@ -113,7 +138,395 @@ def _server_config(agent: str, command: str, backend: str, store: str | Path | N
     return {"command": command, "args": ["--agent", agent], "env": env}
 
 
+def _run_openclaw_cli_integration(
+    profile: ClientProfile,
+    *,
+    action: str,
+    scope: ScopeName,
+    dry_run: bool,
+    target: Any,
+    server_name: str,
+    server: dict[str, Any],
+    warnings: list[str],
+    mcp_command: str,
+) -> IntegrationResult:
+    if action == "status":
+        state = _openclaw_state(server_name)
+        return _result(True, profile, action, scope, False, dry_run, target, "", state, warnings)
+    if action == "doctor":
+        state = _openclaw_state(server_name)
+        command = _openclaw_command()
+        plugin_registered = _openclaw_plugin_registered(OPENCLAW_PLUGIN_ID) if command else False
+        plugin_enabled = _openclaw_plugin_enabled(OPENCLAW_PLUGIN_ID) if plugin_registered else False
+        hooks_ready = _openclaw_runtime_hooks_ready(OPENCLAW_PLUGIN_ID) if plugin_enabled else False
+        if not command:
+            warnings.append("openclaw is not available on PATH.")
+        if not which(mcp_command):
+            warnings.append(f"{mcp_command} is not available on PATH.")
+        if not _openclaw_plugin_installed(target):
+            warnings.append("OpenClaw Datailor plugin files are not installed; run integrate install --client openclaw.")
+        if not plugin_registered:
+            warnings.append("OpenClaw Datailor plugin is not registered; run integrate install --client openclaw.")
+        elif not plugin_enabled:
+            warnings.append("OpenClaw Datailor plugin is disabled; run integrate install --client openclaw.")
+        elif not hooks_ready:
+            warnings.append("OpenClaw Datailor plugin hooks are not fully enabled; run integrate install --client openclaw to allow agent_end capture.")
+        ok = state == "configured" and plugin_registered and plugin_enabled and hooks_ready and not warnings
+        return _result(
+            ok,
+            profile,
+            action,
+            scope,
+            False,
+            dry_run,
+            target,
+            "",
+            state,
+            warnings,
+            details=_openclaw_details(
+                profile,
+                target,
+                "openclaw doctor",
+                server_name,
+                plugin_registered=plugin_registered,
+                plugin_enabled=plugin_enabled,
+                hooks_ready=hooks_ready,
+            ),
+        )
+    if action == "install":
+        command = _openclaw_command()
+        if not command:
+            warnings.append("openclaw is not available on PATH.")
+            return _result(False, profile, action, scope, False, dry_run, target, "", "not_installed", warnings)
+        state = _openclaw_state(server_name)
+        plugin_registered = _openclaw_plugin_registered(OPENCLAW_PLUGIN_ID)
+        plugin_enabled = _openclaw_plugin_enabled(OPENCLAW_PLUGIN_ID) if plugin_registered else False
+        hooks_ready = _openclaw_runtime_hooks_ready(OPENCLAW_PLUGIN_ID) if plugin_enabled else False
+        plugin_files_changed = _openclaw_plugin_files_changed(target)
+        config_json = json.dumps(server, ensure_ascii=False)
+        would_change = state != "configured" or not plugin_registered or not plugin_enabled or not hooks_ready or plugin_files_changed
+        details = _openclaw_details(
+            profile,
+            target,
+            "openclaw plugins install && openclaw mcp set",
+            server_name,
+            plugin_registered=plugin_registered,
+            plugin_enabled=plugin_enabled,
+            hooks_ready=hooks_ready,
+            plugin_files_changed=plugin_files_changed,
+        )
+        if dry_run:
+            planned_state = "would_configure" if would_change else "configured"
+            return _result(True, profile, action, scope, would_change, dry_run, target, "", planned_state, warnings, details=details)
+        plugin_changed = _install_openclaw_plugin_files(target)
+        plugin_install_changed = False
+        if not plugin_registered:
+            completed = _run_openclaw(command, ["plugins", "install", str(target.plugin_path), "--link"], timeout=30)
+            if isinstance(completed, Exception):
+                warnings.append(f"openclaw plugins install failed to launch: {completed.__class__.__name__}.")
+                return _result(False, profile, action, scope, False, dry_run, target, "", "error", warnings, details=details)
+            if completed.returncode != 0:
+                warnings.append(f"openclaw plugins install failed with exit code {completed.returncode}.")
+                return _result(False, profile, action, scope, False, dry_run, target, "", "error", warnings, details=details)
+            plugin_registered = True
+            plugin_enabled = True
+            plugin_install_changed = True
+        plugin_enable_changed = False
+        if plugin_registered and not plugin_enabled:
+            completed = _run_openclaw(command, ["plugins", "enable", OPENCLAW_PLUGIN_ID], timeout=20)
+            if isinstance(completed, Exception):
+                warnings.append(f"openclaw plugins enable failed to launch: {completed.__class__.__name__}.")
+                return _result(False, profile, action, scope, False, dry_run, target, "", "error", warnings, details=details)
+            if completed.returncode != 0:
+                warnings.append(f"openclaw plugins enable failed with exit code {completed.returncode}.")
+                return _result(False, profile, action, scope, False, dry_run, target, "", "error", warnings, details=details)
+            plugin_enabled = True
+            plugin_enable_changed = True
+        hooks_config_changed = False
+        if not hooks_ready:
+            completed = _run_openclaw(
+                command,
+                ["config", "patch", "--stdin"],
+                input_text=_openclaw_hooks_config_patch(OPENCLAW_PLUGIN_ID),
+                timeout=20,
+            )
+            if isinstance(completed, Exception):
+                warnings.append(f"openclaw config patch failed to launch: {completed.__class__.__name__}.")
+                return _result(False, profile, action, scope, False, dry_run, target, "", "error", warnings, details=details)
+            if completed.returncode != 0:
+                warnings.append(f"openclaw config patch failed with exit code {completed.returncode}.")
+                return _result(False, profile, action, scope, False, dry_run, target, "", "error", warnings, details=details)
+            hooks_ready = _openclaw_runtime_hooks_ready(OPENCLAW_PLUGIN_ID)
+            if not hooks_ready:
+                warnings.append("openclaw config patch completed, but Datailor plugin hooks are still not fully enabled.")
+                return _result(False, profile, action, scope, False, dry_run, target, "", "error", warnings, details=details)
+            hooks_config_changed = True
+        mcp_changed = state != "configured"
+        if mcp_changed:
+            completed = _run_openclaw(command, ["mcp", "set", server_name, config_json], timeout=20)
+            if isinstance(completed, Exception):
+                warnings.append(f"openclaw mcp set failed to launch: {completed.__class__.__name__}.")
+                return _result(False, profile, action, scope, False, dry_run, target, "", "error", warnings, details=details)
+            if completed.returncode != 0:
+                warnings.append(f"openclaw mcp set failed with exit code {completed.returncode}.")
+                return _result(False, profile, action, scope, False, dry_run, target, "", "error", warnings, details=details)
+        details = _openclaw_details(
+            profile,
+            target,
+            "openclaw plugins install && openclaw mcp set",
+            server_name,
+            plugin_registered=plugin_registered,
+            plugin_enabled=plugin_enabled,
+            hooks_ready=hooks_ready,
+            plugin_files_changed=False,
+        )
+        changed = plugin_changed or plugin_install_changed or plugin_enable_changed or hooks_config_changed or mcp_changed
+        return _result(True, profile, action, scope, changed, dry_run, target, "", "configured", warnings, details=details)
+    if action == "remove":
+        command = _openclaw_command()
+        if not command:
+            warnings.append("openclaw is not available on PATH.")
+            return _result(False, profile, action, scope, False, dry_run, target, "", "not_installed", warnings)
+        state = _openclaw_state(server_name)
+        plugin_registered = _openclaw_plugin_registered(OPENCLAW_PLUGIN_ID)
+        plugin_enabled = _openclaw_plugin_enabled(OPENCLAW_PLUGIN_ID) if plugin_registered else False
+        hooks_ready = _openclaw_runtime_hooks_ready(OPENCLAW_PLUGIN_ID) if plugin_enabled else False
+        details = _openclaw_details(
+            profile,
+            target,
+            "openclaw plugins disable && openclaw mcp unset",
+            server_name,
+            plugin_registered=plugin_registered,
+            plugin_enabled=plugin_enabled,
+            hooks_ready=hooks_ready,
+        )
+        would_change = state != "not_configured" or plugin_enabled or hooks_ready
+        if dry_run:
+            planned_state = "would_remove" if would_change else "not_configured"
+            return _result(True, profile, action, scope, would_change, dry_run, target, "", planned_state, warnings, details=details)
+        mcp_changed = state != "not_configured"
+        if mcp_changed:
+            completed = _run_openclaw(command, ["mcp", "unset", server_name], timeout=20)
+            if isinstance(completed, Exception):
+                warnings.append(f"openclaw mcp unset failed to launch: {completed.__class__.__name__}.")
+                return _result(False, profile, action, scope, False, dry_run, target, "", "error", warnings, details=details)
+            if completed.returncode != 0:
+                warnings.append(f"openclaw mcp unset failed with exit code {completed.returncode}.")
+                return _result(False, profile, action, scope, False, dry_run, target, "", "error", warnings, details=details)
+        plugin_disable_changed = False
+        if plugin_registered and plugin_enabled:
+            completed = _run_openclaw(command, ["plugins", "disable", OPENCLAW_PLUGIN_ID], timeout=20)
+            if isinstance(completed, Exception):
+                warnings.append(f"openclaw plugins disable failed to launch: {completed.__class__.__name__}.")
+                return _result(False, profile, action, scope, False, dry_run, target, "", "error", warnings, details=details)
+            if completed.returncode != 0:
+                warnings.append(f"openclaw plugins disable failed with exit code {completed.returncode}.")
+                return _result(False, profile, action, scope, False, dry_run, target, "", "error", warnings, details=details)
+            plugin_disable_changed = True
+        hooks_ready = _openclaw_runtime_hooks_ready(OPENCLAW_PLUGIN_ID)
+        if hooks_ready:
+            warnings.append("openclaw plugins disable completed, but Datailor plugin hooks are still enabled.")
+            return _result(False, profile, action, scope, False, dry_run, target, "", "error", warnings, details=details)
+        details = _openclaw_details(profile, target, "openclaw plugins disable && openclaw mcp unset", server_name)
+        changed = mcp_changed or plugin_disable_changed
+        return _result(True, profile, action, scope, changed, dry_run, target, "", "not_configured", warnings, details=details)
+    raise ValueError(f"unsupported integration action: {action}")
+
+
+def _run_openclaw(
+    command: str,
+    args: list[str],
+    *,
+    timeout: int,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str] | Exception:
+    try:
+        return subprocess.run(
+            [command, *args],
+            input=input_text,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return exc
+
+
+def _openclaw_state(server_name: str) -> str:
+    command = _openclaw_command()
+    if not command:
+        return "not_installed"
+    completed = _run_openclaw(command, ["mcp", "list"], timeout=10)
+    if isinstance(completed, Exception):
+        return "unknown"
+    if completed.returncode != 0:
+        return "unknown"
+    return "configured" if server_name in completed.stdout else "not_configured"
+
+
+def _openclaw_details(
+    profile: ClientProfile,
+    target: Any,
+    command: str,
+    server_name: str,
+    *,
+    plugin_registered: bool | None = None,
+    plugin_enabled: bool | None = None,
+    hooks_ready: bool | None = None,
+    plugin_files_changed: bool | None = None,
+) -> dict[str, Any]:
+    if plugin_registered is None:
+        plugin_registered = _openclaw_plugin_registered(OPENCLAW_PLUGIN_ID)
+    if plugin_enabled is None:
+        plugin_enabled = _openclaw_plugin_enabled(OPENCLAW_PLUGIN_ID) if plugin_registered else False
+    if hooks_ready is None:
+        hooks_ready = _openclaw_runtime_hooks_ready(OPENCLAW_PLUGIN_ID) if plugin_enabled else False
+    return {
+        "display_name": profile.display_name,
+        "plugin_path": str(target.plugin_path) if getattr(target, "plugin_path", None) else "",
+        "docs_url": profile.docs_url,
+        "command": command,
+        "server_name": server_name,
+        "plugin_id": OPENCLAW_PLUGIN_ID,
+        "plugin_installed": _openclaw_plugin_installed(target),
+        "plugin_registered": plugin_registered,
+        "plugin_enabled": plugin_enabled,
+        "hooks_ready": hooks_ready,
+        "plugin_files_changed": plugin_files_changed,
+    }
+
+
+def _openclaw_command() -> str:
+    return which("openclaw") or ""
+
+
+def _openclaw_plugin_installed(target: Any) -> bool:
+    plugin_path = getattr(target, "plugin_path", None)
+    return bool(
+        plugin_path
+        and (Path(plugin_path) / "index.js").exists()
+        and (Path(plugin_path) / "package.json").exists()
+        and (Path(plugin_path) / "openclaw.plugin.json").exists()
+    )
+
+
+def _openclaw_plugin_files_changed(target: Any) -> bool:
+    plugin_path = getattr(target, "plugin_path", None)
+    if not plugin_path:
+        return False
+    destination = Path(plugin_path)
+    template = Path(__file__).resolve().parents[1] / "resources" / "openclaw-plugin"
+    for path in template.rglob("*"):
+        if not path.is_file():
+            continue
+        target_file = destination / path.relative_to(template)
+        content = path.read_bytes()
+        if not target_file.exists() or target_file.read_bytes() != content:
+            return True
+    return False
+
+
+def _install_openclaw_plugin_files(target: Any) -> bool:
+    plugin_path = getattr(target, "plugin_path", None)
+    if not plugin_path:
+        return False
+    destination = Path(plugin_path)
+    template = Path(__file__).resolve().parents[1] / "resources" / "openclaw-plugin"
+    changed = False
+    for path in template.rglob("*"):
+        if not path.is_file():
+            continue
+        target_file = destination / path.relative_to(template)
+        content = path.read_bytes()
+        if not target_file.exists() or target_file.read_bytes() != content:
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            target_file.write_bytes(content)
+            changed = True
+    return changed
+
+
+def _openclaw_plugin_registered(plugin_id: str) -> bool:
+    return _openclaw_plugin_entry(plugin_id) is not None
+
+
+def _openclaw_plugin_enabled(plugin_id: str) -> bool:
+    entry = _openclaw_plugin_entry(plugin_id)
+    if not entry:
+        return False
+    return entry.get("enabled") is True and entry.get("status") != "disabled"
+
+
+def _openclaw_plugin_entry(plugin_id: str) -> dict[str, Any] | None:
+    command = _openclaw_command()
+    if not command:
+        return None
+    completed = _run_openclaw(command, ["plugins", "list", "--json"], timeout=20)
+    if isinstance(completed, Exception) or completed.returncode != 0:
+        return None
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return None
+    return _json_plugin_entry(payload, plugin_id)
+
+
+def _openclaw_runtime_hooks_ready(plugin_id: str) -> bool:
+    command = _openclaw_command()
+    if not command:
+        return False
+    completed = _run_openclaw(command, ["plugins", "inspect", plugin_id, "--runtime", "--json"], timeout=20)
+    if isinstance(completed, Exception) or completed.returncode != 0:
+        return False
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return False
+    hooks = payload.get("typedHooks") if isinstance(payload, dict) else None
+    if not isinstance(hooks, list):
+        return False
+    hook_names = {item.get("name") for item in hooks if isinstance(item, dict)}
+    return OPENCLAW_EXPECTED_HOOKS.issubset(hook_names)
+
+
+def _openclaw_hooks_config_patch(plugin_id: str) -> str:
+    return json.dumps({"plugins": {"entries": {plugin_id: {"hooks": {"allowConversationAccess": True}}}}})
+
+
+def _json_has_plugin_id(payload: Any, plugin_id: str) -> bool:
+    return _json_plugin_entry(payload, plugin_id) is not None
+
+
+def _json_plugin_entry(payload: Any, plugin_id: str) -> dict[str, Any] | None:
+    if isinstance(payload, dict):
+        if payload.get("id") == plugin_id:
+            return payload
+        plugins = payload.get("plugins")
+        if isinstance(plugins, list):
+            for item in plugins:
+                found = _json_plugin_entry(item, plugin_id)
+                if found:
+                    return found
+        entries = payload.get("entries")
+        if isinstance(entries, dict):
+            if plugin_id in entries and isinstance(entries[plugin_id], dict):
+                return entries[plugin_id]
+            for item in entries.values():
+                found = _json_plugin_entry(item, plugin_id)
+                if found:
+                    return found
+        return None
+    if isinstance(payload, list):
+        for item in payload:
+            found = _json_plugin_entry(item, plugin_id)
+            if found:
+                return found
+    return None
+
+
 def _state(profile: ClientProfile, path: Path | None, server_name: str, scope: ScopeName, project_root: str | Path | None) -> str:
+    if profile.name == "openclaw":
+        return _openclaw_state(server_name)
     if path is None or not path.exists():
         return "not_configured"
     if profile.name == "codex":

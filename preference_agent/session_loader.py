@@ -66,6 +66,12 @@ def _sessions_from_json(data: Any, source: str) -> list[Session]:
             sessions.extend(_sessions_from_json(item, child_source))
         return sessions
     if isinstance(data, dict):
+        if data.get("type") == "message" and isinstance(data.get("message"), dict):
+            nested = dict(data["message"])
+            for key in ("session_id", "sessionId", "conversation_id", "chat_id", "id", "created_at", "time", "timestamp"):
+                if key in data and key not in nested:
+                    nested[key] = data[key]
+            return [_session_from_messages(source, [nested], data)]
         # 优先探测内部消息列表，避免 content + messages 的 wrapper 只返回顶层 content
         for key in ("messages", "conversation", "conversations", "chat", "items"):
             value = data.get(key)
@@ -131,10 +137,27 @@ def _message_content(item: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
         if isinstance(value, list):
-            text = "\n".join(str(part) for part in value if str(part).strip())
+            text = _content_parts_text(value)
             if text.strip():
                 return text.strip()
     return ""
+
+
+def _content_parts_text(parts: list[Any]) -> str:
+    texts: list[str] = []
+    for part in parts:
+        if isinstance(part, str) and part.strip():
+            texts.append(part.strip())
+            continue
+        if not isinstance(part, dict):
+            continue
+        part_type = str(part.get("type") or "").casefold()
+        if part_type and part_type != "text":
+            continue
+        text = part.get("text")
+        if isinstance(text, str) and text.strip():
+            texts.append(text.strip())
+    return "\n".join(texts)
 
 
 def _markdown_or_text_session(path: Path) -> Session:

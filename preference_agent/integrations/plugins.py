@@ -31,6 +31,8 @@ def export_plugin_template(
         _write_claude_plugin(destination, server_name, server)
     elif profile.name == "kimi":
         _write_kimi_plugin(destination)
+    elif profile.name == "openclaw":
+        _write_openclaw_plugin(destination)
     else:
         raise ValueError(f"unsupported plugin client: {profile.name}")
     files = [str(path.relative_to(destination)) for path in sorted(destination.rglob("*")) if path.is_file()]
@@ -114,6 +116,16 @@ def _write_kimi_plugin(destination: Path) -> None:
     script_path.write_text(_kimi_tool_script(), encoding="utf-8")
     _write_skill(destination / "SKILL.md", "kimi")
     _write_readme(destination / "README.md", "Kimi Code")
+
+
+def _write_openclaw_plugin(destination: Path) -> None:
+    template = Path(__file__).resolve().parents[1] / "resources" / "openclaw-plugin"
+    for path in template.rglob("*"):
+        if not path.is_file():
+            continue
+        target = destination / path.relative_to(template)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:

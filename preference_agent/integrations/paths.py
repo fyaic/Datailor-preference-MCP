@@ -56,4 +56,12 @@ def target_for_profile(profile: ClientProfile, scope: ScopeName, project_root: s
         installed = kimi_home.exists() or bool(which("kimi")) or config_path.exists()
         return ClientTarget(profile.name, scope, "json", config_path, plugin_path, installed, True, tuple(warnings))
 
+    if profile.name == "openclaw":
+        openclaw_home = Path(os.getenv("OPENCLAW_HOME")) if os.getenv("OPENCLAW_HOME") else home / ".openclaw"
+        if scope != "user":
+            warnings.append("OpenClaw MCP servers are managed by the OpenClaw CLI; project scope maps to user-level CLI config.")
+        plugin_path = openclaw_home / "plugins" / "datailor-preferences"
+        installed = openclaw_home.exists() or bool(which("openclaw"))
+        return ClientTarget(profile.name, scope, "cli", None, plugin_path, installed, True, tuple(warnings))
+
     raise ValueError(f"unsupported client: {profile.name}")

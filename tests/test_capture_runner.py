@@ -10,6 +10,43 @@ from preference_agent.capture_runner import CaptureConfig, CaptureRunner, _extra
 
 
 class CaptureRunnerTests(unittest.TestCase):
+    def test_openclaw_message_record_extracts_only_user_text_parts(self) -> None:
+        record = {
+            "type": "message",
+            "message": {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "From now on, keep project codenames unchanged."},
+                    {"type": "toolResult", "text": "tool output must stay out"},
+                    {"type": "image", "url": "file:///tmp/image.png"},
+                ],
+            },
+            "session_id": "openclaw-session",
+        }
+
+        messages = _extract_messages(record)
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["role"], "user")
+        self.assertEqual(messages[0]["content"], "From now on, keep project codenames unchanged.")
+        self.assertEqual(messages[0]["session_id"], "openclaw-session")
+        self.assertNotIn("tool output", messages[0]["content"])
+        self.assertNotIn("image.png", messages[0]["content"])
+
+    def test_openclaw_assistant_message_is_not_defaulted_to_user(self) -> None:
+        record = {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "I will remember that."}],
+            },
+        }
+
+        messages = _extract_messages(record)
+
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["role"], "assistant")
+
     def test_content_only_jsonl_is_treated_as_user_history(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

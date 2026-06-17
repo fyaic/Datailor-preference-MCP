@@ -765,6 +765,12 @@ def _extract_messages(data: Any) -> list[dict[str, str]]:
         return messages
     if not isinstance(data, dict):
         return []
+    if data.get("type") == "message" and isinstance(data.get("message"), dict):
+        nested = dict(data["message"])
+        for key in ("session_id", "sessionId", "conversation_id", "chat_id"):
+            if key in data and key not in nested:
+                nested[key] = data[key]
+        return _extract_messages(nested)
     # 优先探测内部消息列表，避免 content + messages 的 wrapper 只返回顶层 content
     for key in ("messages", "conversation", "chat", "items"):
         value = data.get(key)
@@ -791,7 +797,7 @@ def _message_from_object(data: dict[str, Any]) -> dict[str, str] | None:
         or data.get("source")
     )
     session_id = data.get("session_id") or data.get("sessionId") or data.get("conversation_id") or data.get("chat_id") or data.get("id")
-    content = (
+    content_value = (
         data.get("content")
         or data.get("text")
         or data.get("message")
@@ -799,8 +805,7 @@ def _message_from_object(data: dict[str, Any]) -> dict[str, str] | None:
         or data.get("markdown")
         or data.get("value")
     )
-    if isinstance(content, list):
-        content = "\n".join(str(item) for item in content if str(item).strip())
+    content = _text_from_content(content_value)
     if isinstance(content, str) and content.strip():
         # 收紧默认 user：如果没有任何 role 标识且 dict 含有 type/kind/source 等字段，
         # 说明可能是 assistant/tool/system，不应默认 user
@@ -814,6 +819,28 @@ def _message_from_object(data: dict[str, Any]) -> dict[str, str] | None:
             "session_id": str(session_id or ""),
         }
     return None
+
+
+def _text_from_content(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                text = item.strip()
+                if text:
+                    parts.append(text)
+                continue
+            if isinstance(item, dict):
+                part_type = str(item.get("type") or "").casefold()
+                if part_type and part_type != "text":
+                    continue
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        return "\n".join(parts).strip()
+    return ""
 
 
 def _normalize_role(role: str) -> str:

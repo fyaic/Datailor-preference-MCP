@@ -31,6 +31,15 @@ PROFILES: dict[ClientName, ClientProfile] = {
         supports_plugin=True,
         docs_url="https://www.kimi.com/code/docs/en/kimi-code-cli/configuration/data-locations.html",
     ),
+    "openclaw": ClientProfile(
+        name="openclaw",
+        display_name="OpenClaw",
+        agent_arg="openclaw",
+        config_kind="cli",
+        default_scope="user",
+        supports_plugin=True,
+        docs_url="",
+    ),
 }
 
 

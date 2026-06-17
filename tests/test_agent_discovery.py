@@ -11,6 +11,24 @@ from preference_agent.capture_runner import CaptureConfig
 
 
 class AgentDiscoveryTests(unittest.TestCase):
+    def test_detects_openclaw_sessions_and_skips_trajectory_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            session = home / ".openclaw" / "agents" / "main" / "sessions" / "session.jsonl"
+            trajectory = home / ".openclaw" / "agents" / "main" / "sessions" / "session.trajectory.jsonl"
+            _write_jsonl(session, "From now on, preserve my terminology.")
+            _write_jsonl(trajectory, "trajectory noise")
+
+            agents = detect_installed_agents(home=home, system="windows")
+            installed = {agent.name: agent for agent in agents if agent.installed}
+            self.assertIn("openclaw", installed)
+            self.assertEqual([Path(source.path).name for source in installed["openclaw"].sources], ["session.jsonl"])
+
+            sources = auto_discover_sources(agent_hint="openclaw", home=home, system="windows")
+            self.assertEqual(sources[0].agent, "openclaw")
+            self.assertEqual(Path(sources[0].path).name, "session.jsonl")
+            self.assertNotIn("session.trajectory.jsonl", [Path(source.path).name for source in sources])
+
     def test_detects_supported_jsonl_agents_and_sorts_by_activity(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
