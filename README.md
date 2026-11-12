@@ -408,7 +408,7 @@ Cloud model example:
 $env:PREFERENCE_MODEL_BACKEND = "openai-compatible"
 $env:PREFERENCE_MODEL_BASE_URL = "https://api.moonshot.ai/v1"
 $env:PREFERENCE_MODEL_API_KEY = "replace-me"
-$env:PREFERENCE_MODEL_NAME = "Kimi-K2.5"
+$env:PREFERENCE_MODEL_NAME = "Kimi-K2.6"
 ```
 
 ### OpenAI-Compatible Provider Compatibility
